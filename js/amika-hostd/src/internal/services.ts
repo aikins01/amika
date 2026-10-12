@@ -22,13 +22,20 @@
  * which the control plane mints from the same secret key and hostd verifies
  * without calling it (`@amika/sandbox/hostd-service-links`). A link grants one
  * service of one machine until its expiry, and forwards exactly as the keyed
- * route does.
+ * route does. Opening one in a browser also sets the link cookie, which sends
+ * the page's root-relative URLs to the same service (`./link-cookie.ts`).
  */
 import type { IncomingMessage } from "node:http";
 import { connect, type Socket } from "node:net";
 import type { Duplex } from "node:stream";
 import { verifyServiceLink } from "@amika/sandbox/hostd-service-links";
 import { secretMatches } from "./auth.js";
+import {
+  LINK_COOKIE,
+  isHostdPath,
+  linkFromCookie,
+  withoutLinkCookie,
+} from "./link-cookie.js";
 import type { ServiceRegistry } from "./service-registry.js";
 import type { MachineRuntime } from "./machine-runtime.js";
 
@@ -67,7 +74,14 @@ export function createUpgradeHandler(
     head: Buffer,
   ): Promise<void> {
     const url = new URL(request.url ?? "/", "http://hostd");
-    const link = parseServiceLinkPath(url.pathname);
+    // A root-relative upgrade (a dev server's hot-reload socket) goes where
+    // the link cookie says, as its HTTP requests do.
+    const cookie = isHostdPath(url.pathname)
+      ? null
+      : linkFromCookie(request.headers.cookie);
+    const link = cookie
+      ? { ...cookie, path: url.pathname }
+      : parseServiceLinkPath(url.pathname);
     const route = link ?? parseServicePath(url.pathname);
     const headers = {
       key: request.headers[SERVICE_KEY_HEADER],
@@ -150,8 +164,8 @@ export function isAmikadSshUpgrade(
  * The handshake as the guest should see it: the guest path in place of the
  * service route, and every header exactly as the caller sent it, including
  * `Host`, `Origin`, and the `Authorization` the guest authenticates. Only
- * hostd's own key and `Proxy-Authorization` are dropped: both were meant for
- * hostd or a proxy in front of it, never for the guest.
+ * hostd's own key, its link cookie, and `Proxy-Authorization` are dropped:
+ * each was meant for hostd or a proxy in front of it, never for the guest.
  */
 function requestHead(request: IncomingMessage, path: string): string {
   const lines = [`${request.method} ${path} HTTP/${request.httpVersion}`];
@@ -159,6 +173,11 @@ function requestHead(request: IncomingMessage, path: string): string {
     const name = request.rawHeaders[i];
     const lower = name.toLowerCase();
     if (lower === "proxy-authorization" || lower === SERVICE_KEY_HEADER) {
+      continue;
+    }
+    if (lower === "cookie" && request.rawHeaders[i + 1].includes(LINK_COOKIE)) {
+      const kept = withoutLinkCookie(request.rawHeaders[i + 1]);
+      if (kept) lines.push(`${name}: ${kept}`);
       continue;
     }
     lines.push(`${name}: ${request.rawHeaders[i + 1]}`);

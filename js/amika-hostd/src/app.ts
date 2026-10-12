@@ -17,6 +17,13 @@ import {
   resolveImage,
 } from "./internal/requests.js";
 import {
+  isHostdPath,
+  linkCookie,
+  linkFromCookie,
+  withoutLinkCookie,
+  type LinkCookieClaim,
+} from "./internal/link-cookie.js";
+import {
   SERVICE_KEY_HEADER,
   authorizeServiceLinkRequest,
   authorizeServiceRequest,
@@ -128,12 +135,15 @@ export function createApp(
   });
   // Authenticate before reading any body, so unauthenticated callers cannot
   // make the daemon buffer up to the body limit.
-  // Service routes take the key in their own header, and service-link
-  // routes a signed link, checked by their handler before it touches the
-  // body (see `./internal/services.ts`).
+  // Service routes take the key in their own header, service-link routes a
+  // signed link, and a guest path the link cookie, each checked by its
+  // handler before it touches the body (see `./internal/services.ts` and
+  // `./internal/link-cookie.ts`).
   const checkSecretKey = requireSecretKey(secretKey);
   app.use("*", (c, next) =>
-    parseServicePath(c.req.path) || parseServiceLinkPath(c.req.path)
+    parseServicePath(c.req.path) ||
+    parseServiceLinkPath(c.req.path) ||
+    (!isHostdPath(c.req.path) && linkFromCookie(c.req.header("cookie")))
       ? next()
       : checkSecretKey(c, next),
   );
@@ -171,6 +181,32 @@ export function createApp(
   for (const machines of [RIGS_ROUTE, LEGACY_MACHINES_ROUTE]) {
     machineRoutes(machines);
   }
+  // Last, so it only sees what no route above claims: a root-relative URL a
+  // page opened through a link asks for, sent to the service the link
+  // cookie names (`./internal/link-cookie.ts`).
+  app.all("*", async (c) => {
+    const claim = isHostdPath(c.req.path)
+      ? null
+      : linkFromCookie(c.req.header("cookie"));
+    if (!claim) return c.notFound();
+    // A worker script served from the root would claim every link on the
+    // host, not just this one's (`hardenServiceLinkResponse`).
+    if (c.req.header("service-worker") === "script") {
+      return hardenServiceLinkResponse(
+        Response.json({ error: "Not found" }, { status: 404 }),
+      );
+    }
+    return hardenServiceLinkResponse(
+      await proxyService(
+        c.req.raw,
+        secretKey,
+        runtime,
+        registry,
+        fetcher,
+        claim,
+      ),
+    );
+  });
   return app;
 
   function machineRoutes(machines: string) {
@@ -290,6 +326,10 @@ const LEGACY_MACHINES_ROUTE = "/api/v1/machines";
 /**
  * Forward one HTTP request to a machine's published guest port. WebSocket
  * upgrades never reach Hono; `./internal/server.ts` pipes those.
+ *
+ * A request on a link route is authorized by its link; one carrying only the
+ * link cookie, by the link `cookie` names, with its whole path as the guest
+ * path.
  */
 async function proxyService(
   request: Request,
@@ -297,9 +337,12 @@ async function proxyService(
   runtime: MachineRuntime,
   registry: ServiceRegistry,
   fetcher: typeof fetch,
+  cookie?: LinkCookieClaim,
 ): Promise<Response> {
   const url = new URL(request.url);
-  const link = parseServiceLinkPath(url.pathname);
+  const link = cookie
+    ? { ...cookie, path: url.pathname }
+    : parseServiceLinkPath(url.pathname);
   const headers = {
     key: request.headers.get(SERVICE_KEY_HEADER),
     authorization: request.headers.get("authorization"),
@@ -331,6 +374,9 @@ async function proxyService(
   stripHopByHopHeaders(forwarded);
   forwarded.delete(SERVICE_KEY_HEADER);
   forwarded.delete("host");
+  const guestCookies = withoutLinkCookie(forwarded.get("cookie"));
+  if (guestCookies) forwarded.set("cookie", guestCookies);
+  else forwarded.delete("cookie");
   let upstream: Response;
   try {
     upstream = await fetcher(
@@ -354,6 +400,9 @@ async function proxyService(
   // longer describe what is sent on.
   responseHeaders.delete("content-encoding");
   responseHeaders.delete("content-length");
+  // Opening a link hands its root-relative URLs to this service.
+  const setCookie = link && !cookie && linkCookie(request, link);
+  if (setCookie) responseHeaders.append("set-cookie", setCookie);
   return new Response(upstream.body, {
     status: upstream.status,
     statusText: upstream.statusText,

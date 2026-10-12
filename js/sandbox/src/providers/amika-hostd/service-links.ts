@@ -21,10 +21,11 @@
  *
  * Every link on a host shares the host's one origin, so links isolate
  * services only as far as paths can: cookies and storage are shared, and a
- * service's root-relative URLs (`/assets/app.js`) leave its link. hostd strips
- * `Service-Worker-Allowed` from link responses, so a service worker a page
- * registers is confined to its own link. One origin per service would need
- * wildcard DNS for each host.
+ * service's root-relative URLs (`/assets/app.js`) leave its link. hostd sends
+ * those to the link the browser opened last, which it records in a cookie
+ * (amika-hostd's `link-cookie.ts`). hostd strips `Service-Worker-Allowed`
+ * from link responses, so a service worker a page registers is confined to
+ * its own link. One origin per service would need wildcard DNS for each host.
  *
  * Only Web Crypto is used, so this runs wherever the provider does.
  */

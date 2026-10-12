@@ -621,6 +621,29 @@ noindex`. They are set rather than defaulted: the credential is hostd's, not
 the service's, so a guest must not be able to opt into spreading it. All
 four are stopgaps that last only as long as the link is the credential.
 
+Most dev servers (Vite, Next.js) write root-relative URLs into their pages
+(`/@vite/client`, `/_next/static/...`, `/api/...`), which leave the link and
+carry no credential. So opening a link in a browser (`Sec-Fetch-Mode:
+navigate`) also sets the link cookie, `__Host-amika-service-link`, naming the
+link's machine, service and token (`src/internal/link-cookie.ts`). A request
+outside hostd's own paths (`/v0beta1/...`, `/api/v1/machines...`, `/health`)
+that carries it is verified as the link would be and forwarded to that
+service with its whole path as the guest path, HTTP and WebSocket upgrades
+(hot reload) alike, and hardened like a link response.
+
+- The cookie grants what the link grants, until the link's expiry
+  (`Max-Age`), and is `HttpOnly; Secure; SameSite=Strict`, so it rides only
+  on requests the host's own pages start. hostd strips it before forwarding
+  any request, on link routes too; a guest's own cookies pass through.
+- It is never set for, nor routes to, `amikad`.
+- A host is one origin, so a browser holds one link cookie per host: the
+  link it opened last. A second service opened side by side takes over the
+  first's root-relative requests; pages under a link path are unaffected.
+- A service worker script requested from the root is refused (`404`): its
+  scope would be the whole origin, every link on the host included.
+- hostd's own paths never accept the cookie, so the machine API, keyed
+  service routes and `/health` still need the key.
+
 - The key goes in `X-Amika-Hostd-Key`, since `Authorization` belongs to the
   guest (`amikad` checks SSH connect tokens with it). hostd never forwards
   the key.
@@ -651,7 +674,8 @@ it once none are deployed. Change a version's contract only in a new version.
 
 Every route, including `/health` and unknown paths, requires the secret key:
 in `X-Amika-Hostd-Key` on service routes, as a signed link on service-link
-routes (see [Service routes](#service-routes)), otherwise as
+routes, or as the link cookie on a path outside hostd's own (see
+[Service routes](#service-routes)), otherwise as
 `Authorization: Bearer <secret key>` (the scheme the Amika CLI uses for API
 credentials). `src/internal/auth.ts` reads it the same way as amika-mono's
 worker auth (`checkWorkerAuth`): strip a leading `Bearer` scheme, trim, compare

@@ -301,14 +301,16 @@ describe("createUpgradeHandler", () => {
       authorization = "Bearer connect-token",
       method = "GET",
       upgrade = "websocket",
+      cookie = "",
     } = {},
   ): Promise<Socket> {
     const socket = connect(port, "127.0.0.1");
     closers.push(() => socket.destroy());
     await once(socket, "connect");
     const keyLine = key ? `X-Amika-Hostd-Key: ${key}\r\n` : "";
+    const cookieLine = cookie ? `Cookie: ${cookie}\r\n` : "";
     socket.write(
-      `${method} ${path} HTTP/1.1\r\nHost: hostd.example\r\nConnection: Upgrade\r\nUpgrade: ${upgrade}\r\n${keyLine}Authorization: ${authorization}\r\n\r\n`,
+      `${method} ${path} HTTP/1.1\r\nHost: hostd.example\r\nConnection: Upgrade\r\nUpgrade: ${upgrade}\r\n${keyLine}${cookieLine}Authorization: ${authorization}\r\n\r\n`,
     );
     return socket;
   }
@@ -456,6 +458,58 @@ describe("createUpgradeHandler", () => {
       const { port } = await hostd(target.port);
       const socket = await open(port, await linkPath(), { key: "" });
       expect(await read(socket)).toMatch(/^HTTP\/1\.1 404 /);
+    });
+  });
+
+  describe("through the link cookie", () => {
+    const cookie = async (
+      service = "web",
+      expiresAt = Math.floor(Date.now() / 1000) + 60,
+    ) =>
+      `__Host-amika-service-link=demo/${service}/${await signServiceLink(
+        SECRET,
+        { rig: "demo", service, expiresAt },
+      )}`;
+
+    it("tunnels a root-relative upgrade to the cookie's service", async () => {
+      // A dev server's hot-reload socket, opened by a page from a link.
+      const target = await guest();
+      const { port } = await hostd(target.port, { services: { web: 5173 } });
+      const socket = await open(port, "/_next/webpack-hmr?id=1", {
+        key: "",
+        cookie: `theme=dark; ${await cookie()}`,
+      });
+      expect(await read(socket)).toBe(
+        "HTTP/1.1 101 Switching Protocols\r\n\r\n",
+      );
+      expect(target.handshake()).toMatch(
+        /^GET \/_next\/webpack-hmr\?id=1 HTTP\/1\.1\r\n/,
+      );
+      // The guest's own cookie arrives; hostd's does not.
+      expect(target.handshake()).toContain("Cookie: theme=dark\r\n");
+      expect(target.handshake()).not.toContain("amika-service-link");
+    });
+
+    it("refuses an expired cookie without reaching the guest", async () => {
+      const target = await guest();
+      const { port } = await hostd(target.port, { services: { web: 5173 } });
+      const socket = await open(port, "/hmr", {
+        key: "",
+        cookie: await cookie("web", 1),
+      });
+      expect(await read(socket)).toMatch(/^HTTP\/1\.1 401 /);
+      expect(target.handshake()).toBe("");
+    });
+
+    it("does not unlock hostd's own routes", async () => {
+      const target = await guest();
+      const { port } = await hostd(target.port, { services: { web: 5173 } });
+      const socket = await open(port, "/v0beta1/rigs/demo/services/web/hmr", {
+        key: "",
+        cookie: await cookie(),
+      });
+      expect(await read(socket)).toMatch(/^HTTP\/1\.1 401 /);
+      expect(target.handshake()).toBe("");
     });
   });
 
