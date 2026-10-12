@@ -69,6 +69,7 @@ import {
   startSmolvm as startSmolvmServe,
   type ManagedSmolvm,
 } from "./smolvm-serve.js";
+import { isLoopbackHost } from "./link-cookie.js";
 
 export const USAGE = `Usage: amika-hostd <command> [options]
 
@@ -767,6 +768,34 @@ async function saveUrl(
     url,
   );
   deps.out(`Set the public URL of host ${saved.hostname} to ${saved.url}`);
+  const problem = previewRoutingProblem(url);
+  if (problem) deps.err(`amika-hostd: ${problem}`);
+}
+
+/**
+ * Why a browser cannot follow a preview's root-relative URLs (`/_next/...`,
+ * `/@vite/client`) at public URL `url`, or undefined when it can. The link
+ * cookie routes them (`./link-cookie.ts`), which needs every root path of the
+ * origin to reach hostd, and a cookie a browser keeps: it drops a `Secure`
+ * one over plain http, and hostd sets none on a loopback address or an
+ * explicit port, since a host's cookies are shared across its ports. Links themselves work either way, so
+ * the URL is kept and the operator warned.
+ */
+function previewRoutingProblem(url: string): string | undefined {
+  const { protocol, hostname, port, pathname } = new URL(url);
+  if (pathname !== "/") {
+    return `${url} serves hostd under ${pathname}, so a preview's root-relative URLs (\`/_next/...\`, \`/@vite/client\`) miss it and fail; give hostd the root of its own origin for previews of dev servers.`;
+  }
+  if (isLoopbackHost(hostname)) {
+    return `hostd sets no preview cookie on a loopback address, which every local server shares, so a preview's root-relative URLs (\`/_next/...\`, \`/@vite/client\`) fail; use an https URL, as ngrok and cloudflared give.`;
+  }
+  if (port !== "") {
+    return `hostd sets no preview cookie on an explicit port (${port}), since a browser shares a host's cookies across its ports, so a preview's root-relative URLs (\`/_next/...\`, \`/@vite/client\`) fail; give hostd a hostname of its own on the default https port, as ngrok and cloudflared give.`;
+  }
+  if (protocol === "http:") {
+    return `browsers drop hostd's preview cookie over plain http, so a preview's root-relative URLs (\`/_next/...\`, \`/@vite/client\`) fail; use an https URL, as ngrok and cloudflared give.`;
+  }
+  return undefined;
 }
 
 /**

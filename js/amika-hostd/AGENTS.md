@@ -621,6 +621,52 @@ noindex`. They are set rather than defaulted: the credential is hostd's, not
 the service's, so a guest must not be able to opt into spreading it. All
 four are stopgaps that last only as long as the link is the credential.
 
+Most dev servers (Vite, Next.js) write root-relative URLs into their pages
+(`/@vite/client`, `/_next/static/...`, `/api/...`), which leave the link and
+carry no credential. So opening a link in a browser (`Sec-Fetch-Mode:
+navigate`) also sets the link cookie, `__Host-amika-service-link`, naming the
+link's machine, service and token (`src/internal/link-cookie.ts`). A request
+outside hostd's own paths (`/v0beta1/...`, `/api/v1/machines...`, `/health`)
+that carries it is verified as the link would be and forwarded to that
+service with its whole path as the guest path, HTTP and WebSocket upgrades
+(hot reload) alike, and hardened like a link response.
+
+- The cookie grants what the link grants, until the link's expiry
+  (`Max-Age`), and is `HttpOnly; Secure; SameSite=Strict`. `SameSite` is by
+  site, which a sibling subdomain shares, so hostd also accepts the cookie
+  only on a request the browser marks `Sec-Fetch-Site: same-origin` (or
+  `none`, for an address typed, a bookmark or a reload), HTTP and upgrades
+  alike. hostd strips it before forwarding any request, on link routes too;
+  a guest's own cookies pass through.
+- It is never set for, nor routes to, `amikad`.
+- A host is one origin, so a browser holds one link cookie per host: the
+  link it opened last. A second service opened side by side takes over the
+  first's root-relative requests; pages under a link path are unaffected.
+- **A host is one trusted unit** (as KAPRO-1037 decided for links), and the
+  cookie relies on it. A page from service A can `fetch("/api/...")` after
+  the browser has opened service B on the same host: the request is
+  same-origin and carries B's cookie, so A reads and acts on B as the user,
+  without learning B's link. Services on one host already share the
+  origin's cookies and storage. Isolating previews from each other needs an
+  origin per preview (a subdomain each), which is KAPRO-1038's to solve;
+  until then, keep code you do not trust off a host whose other previews
+  you open.
+- A service worker script requested from the root is refused (`404`): its
+  scope would be the whole origin, every link on the host included.
+- hostd's own paths never accept the cookie, so the machine API, keyed
+  service routes and `/health` still need the key.
+- It needs a hostname of hostd's own, at the root of an https origin on the
+  default port, as an ngrok or cloudflared tunnel gives. Under a path
+  (`https://example.com/hostd/`), root-relative URLs miss hostd entirely;
+  over plain http, browsers drop the `Secure` cookie. Browsers scope cookies
+  by host, not port, so hostd sets none on an explicit port
+  (`preview.example:8443`) or an address that reaches the machine itself
+  (`localhost`, `127.0.0.0/8`, `[::1]`, their IPv4-mapped forms,
+  `0.0.0.0`): every other server on that host would receive the token and
+  could replay it. `register-url` keeps such a URL, since links still work,
+  but warns. hostd reads the host from `Host`, so a tunnel must pass it
+  through unrewritten, as ngrok and cloudflared do by default.
+
 - The key goes in `X-Amika-Hostd-Key`, since `Authorization` belongs to the
   guest (`amikad` checks SSH connect tokens with it). hostd never forwards
   the key.
@@ -651,7 +697,8 @@ it once none are deployed. Change a version's contract only in a new version.
 
 Every route, including `/health` and unknown paths, requires the secret key:
 in `X-Amika-Hostd-Key` on service routes, as a signed link on service-link
-routes (see [Service routes](#service-routes)), otherwise as
+routes, or as the link cookie on a path outside hostd's own (see
+[Service routes](#service-routes)), otherwise as
 `Authorization: Bearer <secret key>` (the scheme the Amika CLI uses for API
 credentials). `src/internal/auth.ts` reads it the same way as amika-mono's
 worker auth (`checkWorkerAuth`): strip a leading `Bearer` scheme, trim, compare
