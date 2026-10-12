@@ -1240,6 +1240,16 @@ describe("service-link routes", () => {
       expect(response.headers.getSetCookie()).toEqual([]);
     });
 
+    it("is not set on an explicit port, whose host's other ports share it", async () => {
+      const { app } = links(HOST_PORT, new Response("ok"));
+      const response = await app.request(
+        `https://preview.example:8443${await link()}`,
+        { headers: navigate },
+      );
+      expect(response.status).toBe(200);
+      expect(response.headers.getSetCookie()).toEqual([]);
+    });
+
     it.each(["localhost", "127.0.0.1", "[::1]", "app.localhost"])(
       "is not set on loopback (%s), whose cookies every local server shares",
       async (host) => {

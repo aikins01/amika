@@ -47,8 +47,11 @@ export interface LinkCookieClaim {
  * request was not a navigation (a script or an image loaded through a link
  * should not change which service owns the root), the link is amikad's, its
  * token carries no usable expiry, or the host was reached on a loopback
- * address: a browser scopes cookies by host, not port, so one set for
- * `localhost:3020` would go to every other server on `localhost` too.
+ * address or an explicit port: a browser scopes cookies by host, not port,
+ * so one set for `localhost:3020` or `preview.example:8443` would go to
+ * every other server on that host too, which could replay the token. A
+ * tunnel's default HTTPS port (443) leaves no port in the address, and the
+ * hostname is then the tunnel's alone.
  *
  * `SameSite=Strict` keeps the cookie off requests other sites start, though
  * a site is a registrable domain, so a sibling subdomain still counts as the
@@ -62,7 +65,8 @@ export function linkCookie(
 ): string | null {
   if (request.headers.get("sec-fetch-mode") !== "navigate") return null;
   if (link.service === AMIKAD_SERVICE) return null;
-  if (isLoopbackHost(new URL(request.url).hostname)) return null;
+  const { hostname, port } = new URL(request.url);
+  if (isLoopbackHost(hostname) || port !== "") return null;
   const maxAge = Number(link.token.split(".")[0]) - nowS;
   if (!Number.isSafeInteger(maxAge) || maxAge <= 0) return null;
   const value = `${link.machine}/${encodeURIComponent(link.service)}/${link.token}`;

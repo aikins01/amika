@@ -646,14 +646,17 @@ service with its whole path as the guest path, HTTP and WebSocket upgrades
   scope would be the whole origin, every link on the host included.
 - hostd's own paths never accept the cookie, so the machine API, keyed
   service routes and `/health` still need the key.
-- It needs hostd at the root of an https origin that is not loopback. Under
-  a path (`https://example.com/hostd/`), root-relative URLs miss hostd
-  entirely; over plain http, browsers drop the `Secure` cookie; and hostd
-  sets none on an address that reaches the machine itself (`localhost`,
-  `127.0.0.0/8`, `[::1]`, their IPv4-mapped forms, `0.0.0.0`), since
-  browsers scope cookies by host, not port, so every local server would
-  receive the token. `register-url` keeps such a URL, since links still
-  work, but warns.
+- It needs a hostname of hostd's own, at the root of an https origin on the
+  default port, as an ngrok or cloudflared tunnel gives. Under a path
+  (`https://example.com/hostd/`), root-relative URLs miss hostd entirely;
+  over plain http, browsers drop the `Secure` cookie. Browsers scope cookies
+  by host, not port, so hostd sets none on an explicit port
+  (`preview.example:8443`) or an address that reaches the machine itself
+  (`localhost`, `127.0.0.0/8`, `[::1]`, their IPv4-mapped forms,
+  `0.0.0.0`): every other server on that host would receive the token and
+  could replay it. `register-url` keeps such a URL, since links still work,
+  but warns. hostd reads the host from `Host`, so a tunnel must pass it
+  through unrewritten, as ngrok and cloudflared do by default.
 
 - The key goes in `X-Amika-Hostd-Key`, since `Authorization` belongs to the
   guest (`amikad` checks SSH connect tokens with it). hostd never forwards

@@ -490,6 +490,7 @@ describe("completing registration", () => {
     ],
     ["https://example.com/hostd/", "serves hostd under /hostd/"],
     ["http://host.example", "drop hostd's preview cookie over plain http"],
+    ["https://preview.example:8443", "no preview cookie on an explicit port"],
   ])(
     "register-url %s warns only when previews cannot route root paths",
     async (url, warning) => {
