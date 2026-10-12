@@ -696,6 +696,33 @@ describe("providerRuntime", () => {
       const error = await failure(runtime.readFile("demo", "/missing"));
       expect(error.status).toBe(404);
     });
+
+    it("answers 404 for a missing file smolvm reports as a 500", async () => {
+      const reason =
+        "agent operation failed: read file: failed to read /missing in the workload container: open /missing: No such file or directory (os error 2)";
+      const smolvm = vi.fn<typeof fetch>(async () =>
+        Response.json(
+          { error: reason, code: "INTERNAL_ERROR" },
+          { status: 500 },
+        ),
+      );
+      const runtime = providerRuntime({ apiUrl: API_URL, fetch: smolvm });
+      const error = await failure(runtime.readFile("demo", "/missing"));
+      expect(error.status).toBe(404);
+      expect(error.reason).toBe(reason);
+    });
+
+    it("passes on smolvm's other 500s for a read", async () => {
+      const smolvm = vi.fn<typeof fetch>(async () =>
+        Response.json(
+          { error: "agent operation failed: read file: Permission denied" },
+          { status: 500 },
+        ),
+      );
+      const runtime = providerRuntime({ apiUrl: API_URL, fetch: smolvm });
+      const error = await failure(runtime.readFile("demo", "/root/secret"));
+      expect(error.status).toBe(500);
+    });
   });
 
   describe("checkServices", () => {
