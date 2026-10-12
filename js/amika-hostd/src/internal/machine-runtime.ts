@@ -324,7 +324,11 @@ export function providerRuntime({
       ),
     readFile: (name, path) =>
       call(async () => {
-        const response = await client.request(filePath(name, path));
+        const response = await client
+          .request(filePath(name, path))
+          .catch((error: unknown) => {
+            throw missingFile(error) ?? error;
+          });
         return {
           body: response.body,
           contentType:
@@ -407,3 +411,30 @@ function sandboxService({ name, port }: ServicePort) {
     protocol: "tcp" as const,
   };
 }
+
+/**
+ * smolvm's refusal to read a file that does not exist, as the 404 the machine
+ * API answers for one; undefined for any other failure. smolvm (1.22.1, at
+ * least) reports a missing file as a 500 `INTERNAL_ERROR` whose reason carries
+ * the guest's `ENOENT`. Amika reads a 404 as "no such file", and a fresh
+ * rig's setup relies on that to create files such as `opencode.json`.
+ */
+function missingFile(error: unknown): RuntimeError | undefined {
+  if (
+    !(error instanceof SmolApiError) ||
+    error.status !== 500 ||
+    !error.reason ||
+    !MISSING_FILE_REASON.test(error.reason)
+  ) {
+    return undefined;
+  }
+  return new RuntimeError(404, error.message, surfaceable(error.reason, []));
+}
+
+/**
+ * smolvm's whole reason for a read whose final cause is `ENOENT`, anchored at
+ * both ends: a path can contain the same words, so a match anywhere else
+ * would turn another refusal (a permission denied, say) into a 404.
+ */
+const MISSING_FILE_REASON =
+  /^agent operation failed: read file: .*: No such file or directory \(os error 2\)$/s;
