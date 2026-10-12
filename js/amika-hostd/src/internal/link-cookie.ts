@@ -25,6 +25,7 @@
  * root-relative requests of the first. Pages under a link path are
  * unaffected, since their path carries their own token.
  */
+import { BlockList, isIP } from "node:net";
 import { AMIKAD_SERVICE } from "./services.js";
 
 /**
@@ -127,17 +128,33 @@ export function isHostdPath(pathname: string): boolean {
 }
 
 /**
- * Whether `hostname` (as `URL.hostname` spells it) is a loopback address,
- * where every local server shares one cookie jar.
+ * Whether `hostname` (as `URL.hostname` spells it) reaches this machine,
+ * where every local server shares one cookie jar: `localhost` and its
+ * subdomains, or an address in `LOCAL_ADDRESSES`. The URL parser already
+ * turns odd IPv4 spellings (`0x7f.1`, `2130706433`) into dotted ones, and
+ * `BlockList` matches an IPv4-mapped IPv6 address (`[::ffff:7f00:1]`)
+ * against the IPv4 rules.
  */
 export function isLoopbackHost(hostname: string): boolean {
+  const name = hostname.replace(/\.$/, "").toLowerCase();
+  if (name === "localhost" || name.endsWith(".localhost")) return true;
+  const address = name.replace(/^\[(.*)\]$/, "$1");
+  const family = isIP(address);
   return (
-    hostname === "localhost" ||
-    hostname.endsWith(".localhost") ||
-    hostname === "[::1]" ||
-    /^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(hostname)
+    family !== 0 &&
+    LOCAL_ADDRESSES.check(address, family === 6 ? "ipv6" : "ipv4")
   );
 }
+
+/**
+ * Loopback, and the unspecified addresses, which reach this machine too on
+ * Linux and macOS.
+ */
+const LOCAL_ADDRESSES = new BlockList();
+LOCAL_ADDRESSES.addSubnet("127.0.0.0", 8, "ipv4");
+LOCAL_ADDRESSES.addAddress("0.0.0.0", "ipv4");
+LOCAL_ADDRESSES.addAddress("::1", "ipv6");
+LOCAL_ADDRESSES.addAddress("::", "ipv6");
 
 function cookieValues(cookieHeader: string | null | undefined) {
   const values = new Map<string, string>();
