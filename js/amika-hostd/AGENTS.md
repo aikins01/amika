@@ -642,6 +642,15 @@ service with its whole path as the guest path, HTTP and WebSocket upgrades
 - A host is one origin, so a browser holds one link cookie per host: the
   link it opened last. A second service opened side by side takes over the
   first's root-relative requests; pages under a link path are unaffected.
+- **A host is one trusted unit** (as KAPRO-1037 decided for links), and the
+  cookie relies on it. A page from service A can `fetch("/api/...")` after
+  the browser has opened service B on the same host: the request is
+  same-origin and carries B's cookie, so A reads and acts on B as the user,
+  without learning B's link. Services on one host already share the
+  origin's cookies and storage. Isolating previews from each other needs an
+  origin per preview (a subdomain each), which is KAPRO-1038's to solve;
+  until then, keep code you do not trust off a host whose other previews
+  you open.
 - A service worker script requested from the root is refused (`404`): its
   scope would be the whole origin, every link on the host included.
 - hostd's own paths never accept the cookie, so the machine API, keyed

@@ -24,6 +24,11 @@
  * link it opened last. A second service opened side by side takes over the
  * root-relative requests of the first. Pages under a link path are
  * unaffected, since their path carries their own token.
+ *
+ * This leans on a host being one trusted unit: a page from one service can
+ * use the cookie the browser holds for another service on the same host,
+ * since every request between them is same-origin. Only an origin per
+ * preview would isolate them (KAPRO-1038).
  */
 import { BlockList, isIP } from "node:net";
 import { AMIKAD_SERVICE } from "./services.js";
