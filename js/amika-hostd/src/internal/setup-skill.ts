@@ -53,7 +53,9 @@ Setup needs the operator's Amika API key the first time, and stores it. If
 environment, setup and \`up\` use it and nothing needs passing, but it is
 not stored, so keep it set for \`up\` and \`register-url\`. Otherwise ask the
 operator to save the key in a file only they can read, and pipe it in (the
-operator deletes the file afterwards):
+operator deletes the file afterwards). An operator without a key creates one
+in the Amika web app, at \`/settings/api-keys\` on the \`api_url\` this host
+uses (https://app.amika.dev/settings/api-keys by default); no CLI can:
 
     amika-hostd setup --non-interactive --hostname <name> < /path/to/key-file
 

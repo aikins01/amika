@@ -234,6 +234,26 @@ describe("runSetup", () => {
     );
   });
 
+  it("says where to create an API key before asking for one", async () => {
+    const h = harness({ answers: [""], secrets: ["amk_123"] });
+    await runSetup(h.deps);
+    expect(h.out).toContain(
+      "Create an Amika API key at https://app.amika.dev/settings/api-keys and paste it below.",
+    );
+  });
+
+  it("points at the configured Amika's API keys page", async () => {
+    const h = harness({
+      answers: [""],
+      secrets: ["amk_123"],
+      env: { AMIKA_HOSTD_API_URL: "https://app.staging-amika.dev/" },
+    });
+    await runSetup(h.deps);
+    expect(h.out).toContain(
+      "Create an Amika API key at https://app.staging-amika.dev/settings/api-keys and paste it below.",
+    );
+  });
+
   it("does not ask for an API key the environment provides", async () => {
     const h = harness({
       answers: [""],
