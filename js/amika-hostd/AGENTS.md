@@ -632,9 +632,12 @@ service with its whole path as the guest path, HTTP and WebSocket upgrades
 (hot reload) alike, and hardened like a link response.
 
 - The cookie grants what the link grants, until the link's expiry
-  (`Max-Age`), and is `HttpOnly; Secure; SameSite=Strict`, so it rides only
-  on requests the host's own pages start. hostd strips it before forwarding
-  any request, on link routes too; a guest's own cookies pass through.
+  (`Max-Age`), and is `HttpOnly; Secure; SameSite=Strict`. `SameSite` is by
+  site, which a sibling subdomain shares, so hostd also accepts the cookie
+  only on a request the browser marks `Sec-Fetch-Site: same-origin` (or
+  `none`, for an address typed, a bookmark or a reload), HTTP and upgrades
+  alike. hostd strips it before forwarding any request, on link routes too;
+  a guest's own cookies pass through.
 - It is never set for, nor routes to, `amikad`.
 - A host is one origin, so a browser holds one link cookie per host: the
   link it opened last. A second service opened side by side takes over the
@@ -643,10 +646,13 @@ service with its whole path as the guest path, HTTP and WebSocket upgrades
   scope would be the whole origin, every link on the host included.
 - hostd's own paths never accept the cookie, so the machine API, keyed
   service routes and `/health` still need the key.
-- It needs hostd at the root of an https origin. Under a path
-  (`https://example.com/hostd/`), root-relative URLs miss hostd entirely;
-  over plain http (loopback aside), browsers drop the `Secure` cookie.
-  `register-url` keeps such a URL, since links still work, but warns.
+- It needs hostd at the root of an https origin that is not loopback. Under
+  a path (`https://example.com/hostd/`), root-relative URLs miss hostd
+  entirely; over plain http, browsers drop the `Secure` cookie; and hostd
+  sets none on a loopback address (`localhost`, `127.0.0.1`, `[::1]`), since
+  browsers scope cookies by host, not port, so every local server would
+  receive the token. `register-url` keeps such a URL, since links still
+  work, but warns.
 
 - The key goes in `X-Amika-Hostd-Key`, since `Authorization` belongs to the
   guest (`amikad` checks SSH connect tokens with it). hostd never forwards

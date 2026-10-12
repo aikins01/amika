@@ -302,13 +302,16 @@ describe("createUpgradeHandler", () => {
       method = "GET",
       upgrade = "websocket",
       cookie = "",
+      fetchSite = "same-origin",
     } = {},
   ): Promise<Socket> {
     const socket = connect(port, "127.0.0.1");
     closers.push(() => socket.destroy());
     await once(socket, "connect");
     const keyLine = key ? `X-Amika-Hostd-Key: ${key}\r\n` : "";
-    const cookieLine = cookie ? `Cookie: ${cookie}\r\n` : "";
+    const cookieLine = cookie
+      ? `Cookie: ${cookie}\r\nSec-Fetch-Site: ${fetchSite}\r\n`
+      : "";
     socket.write(
       `${method} ${path} HTTP/1.1\r\nHost: hostd.example\r\nConnection: Upgrade\r\nUpgrade: ${upgrade}\r\n${keyLine}${cookieLine}Authorization: ${authorization}\r\n\r\n`,
     );
@@ -488,6 +491,19 @@ describe("createUpgradeHandler", () => {
       // The guest's own cookie arrives; hostd's does not.
       expect(target.handshake()).toContain("Cookie: theme=dark\r\n");
       expect(target.handshake()).not.toContain("amika-service-link");
+    });
+
+    it("refuses the cookie on a sibling subdomain's socket", async () => {
+      // SameSite lets a same-site page send it; the same-origin mark does not.
+      const target = await guest();
+      const { port } = await hostd(target.port, { services: { web: 5173 } });
+      const socket = await open(port, "/hmr", {
+        key: "",
+        cookie: await cookie(),
+        fetchSite: "same-site",
+      });
+      expect(await read(socket)).toMatch(/^HTTP\/1\.1 401 /);
+      expect(target.handshake()).toBe("");
     });
 
     it("refuses an expired cookie without reaching the guest", async () => {

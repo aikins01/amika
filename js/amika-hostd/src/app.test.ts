@@ -1191,6 +1191,10 @@ describe("service-link routes", () => {
   describe("the link cookie", () => {
     const COOKIE = "__Host-amika-service-link";
     const navigate = { "Sec-Fetch-Mode": "navigate" };
+    /** A public host: no cookie is set on loopback (`app.request`'s default). */
+    const at = (path: string) => `https://hostd.example${path}`;
+    /** What a browser marks a request the origin's own page starts. */
+    const ownPage = { "Sec-Fetch-Site": "same-origin" };
 
     async function cookie(
       service = "frontend",
@@ -1208,7 +1212,7 @@ describe("service-link routes", () => {
         }),
       );
       const path = await link("frontend", { expiresAt: NOW_S + 600 });
-      const response = await app.request(path, { headers: navigate });
+      const response = await app.request(at(path), { headers: navigate });
       const cookies = response.headers.getSetCookie();
       // The guest's own cookie is kept beside hostd's.
       expect(cookies).toContain("guest=1; Path=/");
@@ -1222,7 +1226,7 @@ describe("service-link routes", () => {
 
     it("is not set by a link's scripts and images, only by opening it", async () => {
       const { app } = links(HOST_PORT, new Response("asset"));
-      const response = await app.request(`${await link()}app.js`, {
+      const response = await app.request(at(`${await link()}app.js`), {
         headers: { "Sec-Fetch-Mode": "no-cors" },
       });
       expect(response.headers.getSetCookie()).toEqual([]);
@@ -1230,11 +1234,24 @@ describe("service-link routes", () => {
 
     it("is not set for amikad's link", async () => {
       const { app } = links(HOST_PORT, new Response("ok"));
-      const response = await app.request(await link("amikad"), {
+      const response = await app.request(at(await link("amikad")), {
         headers: navigate,
       });
       expect(response.headers.getSetCookie()).toEqual([]);
     });
+
+    it.each(["localhost", "127.0.0.1", "[::1]", "app.localhost"])(
+      "is not set on loopback (%s), whose cookies every local server shares",
+      async (host) => {
+        const { app } = links(HOST_PORT, new Response("ok"));
+        const response = await app.request(
+          `http://${host}:3020${await link()}`,
+          { headers: navigate },
+        );
+        expect(response.status).toBe(200);
+        expect(response.headers.getSetCookie()).toEqual([]);
+      },
+    );
 
     it("sends a root-relative request to its service, with no key", async () => {
       const { app, runtime, fetcher } = links(
@@ -1242,7 +1259,7 @@ describe("service-link routes", () => {
         new Response("chunk", { headers: { "X-Guest": "yes" } }),
       );
       const response = await app.request("/_next/static/chunks/app.js?v=2", {
-        headers: { Cookie: `guest=1; ${await cookie()}` },
+        headers: { ...ownPage, Cookie: `guest=1; ${await cookie()}` },
       });
       expect(response.status).toBe(200);
       expect(await response.text()).toBe("chunk");
@@ -1262,7 +1279,7 @@ describe("service-link routes", () => {
     it("routes an encoded service name", async () => {
       const { app, runtime } = links(HOST_PORT, new Response("ok"));
       const response = await app.request("/favicon.ico", {
-        headers: { Cookie: await cookie("Coding Agent/v2") },
+        headers: { ...ownPage, Cookie: await cookie("Coding Agent/v2") },
       });
       expect(response.status).toBe(200);
       expect(runtime.hostPort).toHaveBeenCalledWith("demo", 4103);
@@ -1295,13 +1312,41 @@ describe("service-link routes", () => {
       async (_label, value) => {
         const { app, runtime, fetcher } = links();
         const response = await app.request("/_next/static/app.js", {
-          headers: { Cookie: await value() },
+          headers: { ...ownPage, Cookie: await value() },
         });
         expect(response.status).toBe(401);
         expectUntouched(runtime);
         expect(fetcher).not.toHaveBeenCalled();
       },
     );
+
+    it("routes a navigation the user started, such as a reload", async () => {
+      const { app } = links(HOST_PORT, new Response("page"));
+      const response = await app.request("/about", {
+        headers: { "Sec-Fetch-Site": "none", Cookie: await cookie() },
+      });
+      expect(response.status).toBe(200);
+    });
+
+    it.each([
+      // A sibling subdomain is the same site, so SameSite lets the cookie
+      // through; only the browser's same-origin mark keeps it out.
+      ["a sibling subdomain's page", "same-site"],
+      ["another site's page", "cross-site"],
+      ["a request with no fetch metadata", undefined],
+    ])("refuses the cookie on %s", async (_label, site) => {
+      const { app, runtime, fetcher } = links();
+      const response = await app.request("/api/waitlist", {
+        method: "POST",
+        headers: {
+          Cookie: await cookie(),
+          ...(site && { "Sec-Fetch-Site": site }),
+        },
+      });
+      expect(response.status).toBe(401);
+      expectUntouched(runtime);
+      expect(fetcher).not.toHaveBeenCalled();
+    });
 
     it("does not unlock hostd's own routes", async () => {
       const { app, runtime, fetcher } = links();
@@ -1313,7 +1358,7 @@ describe("service-link routes", () => {
         "/api/v1/machines",
       ]) {
         const response = await app.request(path, {
-          headers: { Cookie: await cookie() },
+          headers: { ...ownPage, Cookie: await cookie() },
         });
         expect(response.status, path).toBe(401);
       }
@@ -1324,7 +1369,11 @@ describe("service-link routes", () => {
     it("refuses a service worker script from the root, which would claim every link", async () => {
       const { app, fetcher } = links();
       const response = await app.request("/sw.js", {
-        headers: { Cookie: await cookie(), "Service-Worker": "script" },
+        headers: {
+          ...ownPage,
+          Cookie: await cookie(),
+          "Service-Worker": "script",
+        },
       });
       expect(response.status).toBe(404);
       expect(fetcher).not.toHaveBeenCalled();

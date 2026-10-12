@@ -482,8 +482,8 @@ describe("completing registration", () => {
 
   it.each([
     ["https://abc.ngrok.app/", undefined],
-    ["http://localhost:4000", undefined],
-    ["http://127.0.0.1:4000", undefined],
+    ["http://localhost:4000", "no preview cookie on a loopback address"],
+    ["https://127.0.0.1:4000", "no preview cookie on a loopback address"],
     ["https://example.com/hostd/", "serves hostd under /hostd/"],
     ["http://host.example", "drop hostd's preview cookie over plain http"],
   ])(

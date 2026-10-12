@@ -78,7 +78,10 @@ export function createUpgradeHandler(
     // the link cookie says, as its HTTP requests do.
     const cookie = isHostdPath(url.pathname)
       ? null
-      : linkFromCookie(request.headers.cookie);
+      : linkFromCookie(
+          request.headers.cookie,
+          request.headers["sec-fetch-site"],
+        );
     const link = cookie
       ? { ...cookie, path: url.pathname }
       : parseServiceLinkPath(url.pathname);

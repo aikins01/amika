@@ -15,6 +15,11 @@
  * grants what the link grants, until the link's own expiry, and is never
  * forwarded to a guest.
  *
+ * Only a request the browser marks as the origin's own (`Sec-Fetch-Site:
+ * same-origin`, or `none` for one the user started) may use the cookie, and
+ * it is never set on a loopback address, whose cookies every local server
+ * shares (`linkCookie`, `linkFromCookie`).
+ *
  * One host is one origin, so a browser holds one such cookie per host: the
  * link it opened last. A second service opened side by side takes over the
  * root-relative requests of the first. Pages under a link path are
@@ -39,13 +44,15 @@ export interface LinkCookieClaim {
 /**
  * The `Set-Cookie` value for a link the browser just opened, or null when the
  * request was not a navigation (a script or an image loaded through a link
- * should not change which service owns the root), the link is amikad's, or
- * its token carries no usable expiry.
+ * should not change which service owns the root), the link is amikad's, its
+ * token carries no usable expiry, or the host was reached on a loopback
+ * address: a browser scopes cookies by host, not port, so one set for
+ * `localhost:3020` would go to every other server on `localhost` too.
  *
- * `SameSite=Strict`: the cookie rides only on requests the host's own pages
- * start, never on a navigation or form another site starts, so a page
- * elsewhere cannot drive a preview's root-relative routes. `HttpOnly`: a
- * guest's script cannot read the token.
+ * `SameSite=Strict` keeps the cookie off requests other sites start, though
+ * a site is a registrable domain, so a sibling subdomain still counts as the
+ * same one; `linkFromCookie` therefore also requires the browser's
+ * same-origin mark. `HttpOnly`: a guest's script cannot read the token.
  */
 export function linkCookie(
   request: Request,
@@ -54,6 +61,7 @@ export function linkCookie(
 ): string | null {
   if (request.headers.get("sec-fetch-mode") !== "navigate") return null;
   if (link.service === AMIKAD_SERVICE) return null;
+  if (isLoopbackHost(new URL(request.url).hostname)) return null;
   const maxAge = Number(link.token.split(".")[0]) - nowS;
   if (!Number.isSafeInteger(maxAge) || maxAge <= 0) return null;
   const value = `${link.machine}/${encodeURIComponent(link.service)}/${link.token}`;
@@ -62,12 +70,18 @@ export function linkCookie(
 
 /**
  * The link a request's `Cookie` header names, or null when it names none or
- * one that cannot be read. Only parsed here; the caller verifies the token.
- * amikad is never reached this way.
+ * one that cannot be read, or the request is not the origin's own:
+ * `fetchSite` (its `Sec-Fetch-Site`) must be `same-origin`, or `none` for a
+ * navigation the user started (an address typed, a bookmark, a reload). A
+ * page on another origin, even a sibling subdomain the cookie's `SameSite`
+ * lets through, cannot drive a preview's routes. Only parsed here; the
+ * caller verifies the token. amikad is never reached this way.
  */
 export function linkFromCookie(
   cookieHeader: string | null | undefined,
+  fetchSite: string | string[] | null | undefined,
 ): LinkCookieClaim | null {
+  if (fetchSite !== "same-origin" && fetchSite !== "none") return null;
   const value = cookieValues(cookieHeader).get(LINK_COOKIE);
   const match =
     value && /^([a-zA-Z0-9][a-zA-Z0-9_-]*)\/([^/]+)\/([^/]+)$/.exec(value);
@@ -109,6 +123,19 @@ export function isHostdPath(pathname: string): boolean {
     pathname.startsWith("/v0beta1/") ||
     pathname === "/api/v1/machines" ||
     pathname.startsWith("/api/v1/machines/")
+  );
+}
+
+/**
+ * Whether `hostname` (as `URL.hostname` spells it) is a loopback address,
+ * where every local server shares one cookie jar.
+ */
+export function isLoopbackHost(hostname: string): boolean {
+  return (
+    hostname === "localhost" ||
+    hostname.endsWith(".localhost") ||
+    hostname === "[::1]" ||
+    /^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(hostname)
   );
 }
 

@@ -143,7 +143,8 @@ export function createApp(
   app.use("*", (c, next) =>
     parseServicePath(c.req.path) ||
     parseServiceLinkPath(c.req.path) ||
-    (!isHostdPath(c.req.path) && linkFromCookie(c.req.header("cookie")))
+    (!isHostdPath(c.req.path) &&
+      linkFromCookie(c.req.header("cookie"), c.req.header("sec-fetch-site")))
       ? next()
       : checkSecretKey(c, next),
   );
@@ -187,7 +188,7 @@ export function createApp(
   app.all("*", async (c) => {
     const claim = isHostdPath(c.req.path)
       ? null
-      : linkFromCookie(c.req.header("cookie"));
+      : linkFromCookie(c.req.header("cookie"), c.req.header("sec-fetch-site"));
     if (!claim) return c.notFound();
     // A worker script served from the root would claim every link on the
     // host, not just this one's (`hardenServiceLinkResponse`).
