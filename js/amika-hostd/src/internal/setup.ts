@@ -188,7 +188,7 @@ export async function runSetup(
     }
   }
 
-  const apiKey = await askApiKey(deps);
+  const apiKey = await askApiKey(deps, effective.apiUrl);
 
   // The file names the store setup used whenever the file alone (its own
   // setting, else the default) would choose another, so a store chosen from
@@ -434,9 +434,13 @@ async function askHostname(
 
 /**
  * The new API key to store, or `undefined` to keep the stored one (or the
- * environment's, which takes precedence over any stored key).
+ * environment's, which takes precedence over any stored key). Before asking,
+ * says where in `apiUrl`'s Amika to create one: the CLI cannot.
  */
-async function askApiKey(deps: SetupDeps): Promise<string | undefined> {
+async function askApiKey(
+  deps: SetupDeps,
+  apiUrl: string,
+): Promise<string | undefined> {
   const fromEnv = envName(deps.env, "apiKey");
   if (fromEnv !== undefined) {
     deps.out(
@@ -450,6 +454,9 @@ async function askApiKey(deps: SetupDeps): Promise<string | undefined> {
   ) {
     return undefined;
   }
+  deps.out(
+    `Create an Amika API key at ${apiKeysPage(apiUrl)} and paste it below.`,
+  );
   for (;;) {
     const answer = (
       await deps.promptSecret("Amika API key (input is hidden): ")
@@ -461,6 +468,11 @@ async function askApiKey(deps: SetupDeps): Promise<string | undefined> {
       "That is not an API key: it must be printable ASCII with no spaces or quotes.",
     );
   }
+}
+
+/** The webapp page where an operator creates API keys, on `apiUrl`'s origin. */
+function apiKeysPage(apiUrl: string): string {
+  return new URL("/settings/api-keys", apiUrl).href;
 }
 
 async function confirm(question: string, deps: SetupDeps): Promise<boolean> {

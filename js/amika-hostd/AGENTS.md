@@ -155,7 +155,9 @@ match where it kept the secrets, so the choice outlasts the variable, and says
 so when it replaces a different one. An existing secret key is kept, but on a
 rerun setup asks whether to regenerate it. Then it asks for the Amika API key,
 with input hidden, or on a rerun whether to replace the stored one; an API key
-in the environment is used instead, and setup does not ask.
+in the environment is used instead, and setup does not ask. Before the prompt
+it names the page that creates one, `/settings/api-keys` on the configured
+API URL's origin, since no CLI can create an API key.
 
 It then writes `hostname` in place (a live line, bare or quoted, else the
 commented `# hostname = ...` one; otherwise above the first table), keeping
