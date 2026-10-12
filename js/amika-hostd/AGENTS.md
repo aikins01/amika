@@ -643,6 +643,10 @@ service with its whole path as the guest path, HTTP and WebSocket upgrades
   scope would be the whole origin, every link on the host included.
 - hostd's own paths never accept the cookie, so the machine API, keyed
   service routes and `/health` still need the key.
+- It needs hostd at the root of an https origin. Under a path
+  (`https://example.com/hostd/`), root-relative URLs miss hostd entirely;
+  over plain http (loopback aside), browsers drop the `Secure` cookie.
+  `register-url` keeps such a URL, since links still work, but warns.
 
 - The key goes in `X-Amika-Hostd-Key`, since `Authorization` belongs to the
   guest (`amikad` checks SSH connect tokens with it). hostd never forwards

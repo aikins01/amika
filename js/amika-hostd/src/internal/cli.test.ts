@@ -480,6 +480,24 @@ describe("completing registration", () => {
     expect(deps.setHostUrl.mock.calls[0][2]).toBe("https://example.com/hostd/");
   });
 
+  it.each([
+    ["https://abc.ngrok.app/", undefined],
+    ["http://localhost:4000", undefined],
+    ["http://127.0.0.1:4000", undefined],
+    ["https://example.com/hostd/", "serves hostd under /hostd/"],
+    ["http://host.example", "drop hostd's preview cookie over plain http"],
+  ])(
+    "register-url %s warns only when previews cannot route root paths",
+    async (url, warning) => {
+      const { deps, err } = unregistered();
+      expect(await runCli(["register-url", url], deps)).toBe(0);
+      // The URL is kept either way: links themselves still work.
+      expect(deps.setHostUrl).toHaveBeenCalled();
+      if (warning) expect(err.join("\n")).toContain(warning);
+      else expect(err).toEqual([]);
+    },
+  );
+
   it("register-url requires the same settings as `up`", async () => {
     const { deps, err } = unregistered();
     const run = runCli(["register-url", "https://x.example"], {
