@@ -723,6 +723,21 @@ describe("providerRuntime", () => {
       const error = await failure(runtime.readFile("demo", "/root/secret"));
       expect(error.status).toBe(500);
     });
+
+    it("passes on a 500 whose path, not its cause, names ENOENT", async () => {
+      const path = "/No such file or directory (os error 2)/a";
+      const smolvm = vi.fn<typeof fetch>(async () =>
+        Response.json(
+          {
+            error: `agent operation failed: read file: failed to read ${path} in the workload container: open ${path}: Permission denied (os error 13)`,
+          },
+          { status: 500 },
+        ),
+      );
+      const runtime = providerRuntime({ apiUrl: API_URL, fetch: smolvm });
+      const error = await failure(runtime.readFile("demo", path));
+      expect(error.status).toBe(500);
+    });
   });
 
   describe("checkServices", () => {

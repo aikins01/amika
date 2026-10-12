@@ -423,9 +423,18 @@ function missingFile(error: unknown): RuntimeError | undefined {
   if (
     !(error instanceof SmolApiError) ||
     error.status !== 500 ||
-    !error.reason?.includes("No such file or directory (os error 2)")
+    !error.reason ||
+    !MISSING_FILE_REASON.test(error.reason)
   ) {
     return undefined;
   }
   return new RuntimeError(404, error.message, surfaceable(error.reason, []));
 }
+
+/**
+ * smolvm's whole reason for a read whose final cause is `ENOENT`, anchored at
+ * both ends: a path can contain the same words, so a match anywhere else
+ * would turn another refusal (a permission denied, say) into a 404.
+ */
+const MISSING_FILE_REASON =
+  /^agent operation failed: read file: .*: No such file or directory \(os error 2\)$/s;
