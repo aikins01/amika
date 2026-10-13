@@ -1,5 +1,5 @@
 /** Reject requests that do not present the daemon's shared secret key. */
-import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
+import { secretMatches } from "@amika/service-auth/gateway";
 import type { MiddlewareHandler } from "hono";
 
 /**
@@ -20,15 +20,4 @@ export function requireSecretKey(secretKey: string): MiddlewareHandler {
     }
     await next();
   };
-}
-
-/**
- * Compare two strings without leaking their length or content: HMAC both with
- * a per-call random key so `timingSafeEqual` always sees 32-byte buffers.
- */
-export function secretMatches(a: string, b: string): boolean {
-  const key = randomBytes(32);
-  const aDigest = createHmac("sha256", key).update(a).digest();
-  const bDigest = createHmac("sha256", key).update(b).digest();
-  return timingSafeEqual(aDigest, bDigest);
 }

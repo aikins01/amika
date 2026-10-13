@@ -2,7 +2,7 @@
 import {
   signServiceLink,
   signServiceToken,
-} from "@amika/sandbox/hostd-service-links";
+} from "@amika/service-auth/credentials";
 import { describe, expect, it, vi } from "vitest";
 import { createApp } from "./app.js";
 import { memoryServiceRegistry } from "./internal/service-registry.js";

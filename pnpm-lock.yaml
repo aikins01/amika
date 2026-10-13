@@ -32,6 +32,9 @@ importers:
       '@amika/sandbox':
         specifier: workspace:*
         version: link:../sandbox
+      '@amika/service-auth':
+        specifier: workspace:*
+        version: link:../service-auth
       '@hono/node-server':
         specifier: 1.19.15
         version: 1.19.15(hono@4.13.9)
@@ -84,6 +87,9 @@ importers:
 
   js/sandbox:
     dependencies:
+      '@amika/service-auth':
+        specifier: workspace:*
+        version: link:../service-auth
       '@daytona/api-client':
         specifier: 0.203.0
         version: 0.203.0
@@ -121,6 +127,36 @@ importers:
       pino:
         specifier: ^10.3.1
         version: 10.3.1
+      prettier:
+        specifier: 3.8.3
+        version: 3.8.3
+      typescript:
+        specifier: ^5
+        version: 5.9.3
+      typescript-eslint:
+        specifier: ^8.55.0
+        version: 8.67.0(eslint@9.39.5)(typescript@5.9.3)
+      vite:
+        specifier: 7.3.5
+        version: 7.3.5(@types/node@22.20.1)(tsx@4.21.0)(yaml@2.9.0)
+      vitest:
+        specifier: 4.1.11
+        version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@22.20.1)(vite@7.3.5(@types/node@22.20.1)(tsx@4.21.0)(yaml@2.9.0))
+
+  js/service-auth:
+    devDependencies:
+      '@eslint/js':
+        specifier: ^9.39.2
+        version: 9.39.5
+      '@types/node':
+        specifier: ^22
+        version: 22.20.1
+      eslint:
+        specifier: ^9
+        version: 9.39.5
+      globals:
+        specifier: ^16.4.0
+        version: 16.5.0
       prettier:
         specifier: 3.8.3
         version: 3.8.3

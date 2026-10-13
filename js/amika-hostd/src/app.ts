@@ -17,24 +17,14 @@ import {
   resolveImage,
 } from "./internal/requests.js";
 import {
-  isHostdPath,
-  linkCookie,
-  linkFromCookie,
-  withoutLinkCookie,
-  type LinkCookieClaim,
-} from "./internal/link-cookie.js";
-import { SERVICE_TOKEN_HEADER } from "@amika/sandbox/hostd-service-links";
+  fromRequest,
+  hardenServiceLinkResponse,
+  type Gateway,
+} from "@amika/service-auth/gateway";
 import {
-  AMIKAD_SERVICE,
-  SERVICE_KEY_HEADER,
-  SERVICE_TOKEN_HEADER_NAME,
-  authorizeServiceLinkRequest,
-  authorizeServiceRouteRequest,
-  parseServiceLinkPath,
-  parseServicePath,
+  hostdGateway,
   resolveHostPort,
   stripHopByHopHeaders,
-  type ServiceRoute,
 } from "./internal/services.js";
 import {
   memoryServiceRegistry,
@@ -139,18 +129,13 @@ export function createApp(
   });
   // Authenticate before reading any body, so unauthenticated callers cannot
   // make the daemon buffer up to the body limit.
-  // Service routes take the key in their own header, service-link routes a
-  // signed link, and a guest path the link cookie, each checked by its
-  // handler before it touches the body (see `./internal/services.ts` and
-  // `./internal/link-cookie.ts`).
+  // Service routes, service-link routes and a guest path the link cookie
+  // claims are the gateway's: it checks each before the body is touched
+  // (`@amika/service-auth/gateway`). Everything else needs the secret key.
+  const gateway = hostdGateway(secretKey);
   const checkSecretKey = requireSecretKey(secretKey);
   app.use("*", (c, next) =>
-    parseServicePath(c.req.path) ||
-    parseServiceLinkPath(c.req.path) ||
-    (!isHostdPath(c.req.path) &&
-      linkFromCookie(c.req.header("cookie"), c.req.header("sec-fetch-site")))
-      ? next()
-      : checkSecretKey(c, next),
+    gateway.claims(fromRequest(c.req.raw)) ? next() : checkSecretKey(c, next),
   );
   // `apis` names the versioned APIs this daemon serves, so a control plane
   // can tell what a host speaks before relying on it.
@@ -162,10 +147,10 @@ export function createApp(
   // Service routes are registered first, so `/<rig>/services/<name>/...`
   // never falls through to a machine route.
   app.all(`${RIGS_ROUTE}/:name/services/:service/*`, (c) =>
-    proxyService(c.req.raw, secretKey, runtime, registry, fetcher),
+    proxyService(c.req.raw, gateway, runtime, registry, fetcher),
   );
   app.all(`${RIGS_ROUTE}/:name/services/:service`, (c) =>
-    proxyService(c.req.raw, secretKey, runtime, registry, fetcher),
+    proxyService(c.req.raw, gateway, runtime, registry, fetcher),
   );
   // A link missing its trailing slash would resolve the service's relative
   // URLs one segment up, dropping the token, so it is sent to the full link.
@@ -180,10 +165,8 @@ export function createApp(
       }),
     );
   });
-  app.all(`${RIGS_ROUTE}/:name/service-links/:service/:token/*`, async (c) =>
-    hardenServiceLinkResponse(
-      await proxyService(c.req.raw, secretKey, runtime, registry, fetcher),
-    ),
+  app.all(`${RIGS_ROUTE}/:name/service-links/:service/:token/*`, (c) =>
+    proxyService(c.req.raw, gateway, runtime, registry, fetcher),
   );
   // The machine API, at its versioned path and at the unversioned path
   // control planes on providers older than `v0beta1` still call.
@@ -192,30 +175,12 @@ export function createApp(
   }
   // Last, so it only sees what no route above claims: a root-relative URL a
   // page opened through a link asks for, sent to the service the link
-  // cookie names (`./internal/link-cookie.ts`).
-  app.all("*", async (c) => {
-    const claim = isHostdPath(c.req.path)
-      ? null
-      : linkFromCookie(c.req.header("cookie"), c.req.header("sec-fetch-site"));
-    if (!claim) return c.notFound();
-    // A worker script served from the root would claim every link on the
-    // host, not just this one's (`hardenServiceLinkResponse`).
-    if (c.req.header("service-worker") === "script") {
-      return hardenServiceLinkResponse(
-        Response.json({ error: "Not found" }, { status: 404 }),
-      );
-    }
-    return hardenServiceLinkResponse(
-      await proxyService(
-        c.req.raw,
-        secretKey,
-        runtime,
-        registry,
-        fetcher,
-        claim,
-      ),
-    );
-  });
+  // cookie names, which the gateway decides.
+  app.all("*", async (c) =>
+    gateway.claims(fromRequest(c.req.raw))
+      ? proxyService(c.req.raw, gateway, runtime, registry, fetcher)
+      : c.notFound(),
+  );
   return app;
 
   function machineRoutes(machines: string) {
@@ -334,60 +299,38 @@ const RIGS_ROUTE = `/${API_VERSION}/rigs`;
 const LEGACY_MACHINES_ROUTE = "/api/v1/machines";
 
 /**
- * Forward one HTTP request to a machine's published guest port. WebSocket
- * upgrades never reach Hono; `./internal/server.ts` pipes those.
- *
- * A request on a link route is authorized by its link; one carrying only the
- * link cookie, by the link `cookie` names, with its whole path as the guest
- * path.
+ * Forward a request the gateway claims to the service it names, as the
+ * gateway decides: refused, or forwarded without the gateway's credentials,
+ * with its answer finished by the gateway (a link's cookie and hardening).
  */
 async function proxyService(
   request: Request,
-  secretKey: string,
+  gateway: Gateway,
   runtime: MachineRuntime,
   registry: ServiceRegistry,
   fetcher: typeof fetch,
-  cookie?: LinkCookieClaim,
 ): Promise<Response> {
-  const url = new URL(request.url);
-  const link = cookie
-    ? { ...cookie, path: url.pathname }
-    : parseServiceLinkPath(url.pathname);
-  const headers = {
-    key: request.headers.get(SERVICE_KEY_HEADER),
-    token: request.headers.get(SERVICE_TOKEN_HEADER_NAME),
-    authorization: request.headers.get("authorization"),
-  };
-  const serviceRoute = link ? null : parseServicePath(url.pathname);
-  const refusal = link
-    ? await authorizeServiceLinkRequest(secretKey, link, headers)
-    : await authorizeServiceRouteRequest(secretKey, serviceRoute, headers);
-  if (refusal === 401) {
-    // Close the connection so Node stops reading an unauthenticated body.
-    return Response.json(
-      { error: "Unauthorized", ...tokenHint(serviceRoute, headers.token) },
-      { status: 401, headers: { Connection: "close" } },
-    );
-  }
-  if (refusal === 400) {
-    return Response.json(
-      {
-        error: `Send the host key in ${SERVICE_KEY_HEADER}, not Authorization, which is forwarded to the guest`,
-      },
-      { status: 400 },
-    );
-  }
-  const route = link ?? serviceRoute;
-  const hostPort = route && (await resolveHostPort(runtime, registry, route));
-  if (!route || hostPort === null) {
+  const decision = await gateway.authorize(fromRequest(request));
+  if (decision.kind === "not-mine") {
     return Response.json({ error: "Not found" }, { status: 404 });
   }
+  if (decision.kind === "refuse") return gateway.refusal(decision);
+  const { route } = decision;
+  const hostPort = await resolveHostPort(runtime, registry, route);
+  if (hostPort === null) {
+    return gateway.harden(
+      decision,
+      Response.json({ error: "Not found" }, { status: 404 }),
+    );
+  }
+  const url = new URL(request.url);
   const forwarded = new Headers(request.headers);
   stripHopByHopHeaders(forwarded);
-  forwarded.delete(SERVICE_KEY_HEADER);
-  forwarded.delete(SERVICE_TOKEN_HEADER_NAME);
+  for (const name of [...forwarded.keys()]) {
+    if (gateway.isCredentialHeader(name)) forwarded.delete(name);
+  }
   forwarded.delete("host");
-  const guestCookies = withoutLinkCookie(forwarded.get("cookie"));
+  const guestCookies = gateway.guestCookies(forwarded.get("cookie"));
   if (guestCookies) forwarded.set("cookie", guestCookies);
   else forwarded.delete("cookie");
   let upstream: Response;
@@ -405,7 +348,10 @@ async function proxyService(
       } as RequestInit,
     );
   } catch {
-    return Response.json({ error: "Service unavailable" }, { status: 502 });
+    return gateway.harden(
+      decision,
+      Response.json({ error: "Service unavailable" }, { status: 502 }),
+    );
   }
   const responseHeaders = new Headers(upstream.headers);
   stripHopByHopHeaders(responseHeaders);
@@ -413,69 +359,12 @@ async function proxyService(
   // longer describe what is sent on.
   responseHeaders.delete("content-encoding");
   responseHeaders.delete("content-length");
-  // Opening a link hands its root-relative URLs to this service.
-  const setCookie = link && !cookie && linkCookie(request, link);
-  if (setCookie) responseHeaders.append("set-cookie", setCookie);
-  return new Response(upstream.body, {
-    status: upstream.status,
-    statusText: upstream.statusText,
-    headers: responseHeaders,
-  });
-}
-
-/**
- * What a refused caller on a service route should do next, for the `hint` of
- * its 401: someone running `curl` against a route with no credential is told
- * where a token goes, and one whose token was refused that it needs a new
- * one. Nothing for amikad, which takes only the host key.
- */
-function tokenHint(
-  route: ServiceRoute | null,
-  token: string | null,
-): { hint?: string } {
-  if (!route || route.service === AMIKAD_SERVICE) return {};
-  return {
-    hint: token
-      ? `The service token is invalid or expired; get a new one from Amika.`
-      : `Send a service token from Amika in ${SERVICE_TOKEN_HEADER}: Bearer <token>.`,
-  };
-}
-
-/**
- * Narrow where a service link's path can end up. The path carries the
- * signature that authorizes it, so every copy of the URL is a working
- * credential until it expires, and none can be revoked individually.
- *
- * Applied to every response on a link route, not only a proxied one.
- * hostd's own answers carry the same credential-bearing URL, and two are
- * cacheable without asking: a `404` for a service that is gone, and the
- * `308` that adds a missing trailing slash -- the most-travelled response
- * of all, since it catches every pasted link, and one whose `Location`
- * repeats the signature.
- *
- * Each header is `set`, not defaulted, and applied after a guest's own are
- * copied: the credential belongs to hostd, not to the service, so a service
- * must not be able to opt into spreading it. Stopgaps while the link is the
- * credential.
- */
-function hardenServiceLinkResponse(response: Response): Response {
-  const headers = response.headers;
-  // Every link on the host shares one origin; without this a service worker
-  // one link registers would claim the others' paths too.
-  headers.delete("service-worker-allowed");
-  // Keep the path out of `Referer`. Browsers already withhold it
-  // cross-origin by default, but same-origin requests still carry the whole
-  // URL and `Referer` is forwarded to the guest, so a co-hosted service
-  // would otherwise be handed a working link. Note this is only the fallback
-  // in the precedence chain -- `<meta name="referrer">` and a
-  // `referrerpolicy` attribute beat it -- so it covers a service that sets no
-  // policy, not one that sets out to leak.
-  headers.set("referrer-policy", "no-referrer");
-  // A cache entry is keyed by its URL, so storing one writes the signature to
-  // disk, where it outlives the tab that fetched it. The cost is that a
-  // preview re-fetches its assets, which is the right trade for a credential.
-  headers.set("cache-control", "private, no-store");
-  // And a link that reaches a crawler should not become a search result.
-  headers.set("x-robots-tag", "noindex");
-  return response;
+  return gateway.finish(
+    decision,
+    new Response(upstream.body, {
+      status: upstream.status,
+      statusText: upstream.statusText,
+      headers: responseHeaders,
+    }),
+  );
 }

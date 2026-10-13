@@ -185,6 +185,7 @@ Other tools:
 - [`amikalyze`](./docs/labs/amikalyze.md): experimental guardrails that control which files coding agents can modify
 - [`akfs`](./docs/labs/akfs.md): experimental tooling for treating file contents as structured data that humans and AI agents can work with
 - [`js/sandbox`](./js/sandbox/src/providers/README.md): Typescript package for plugging sandbox providers into Amika
+- [`js/service-auth`](./js/service-auth/AGENTS.md): Typescript package deciding who may reach a rig's service: host keys, service tokens and signed links
 
 Links:
 

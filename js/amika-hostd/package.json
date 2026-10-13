@@ -18,6 +18,7 @@
   },
   "dependencies": {
     "@amika/sandbox": "workspace:*",
+    "@amika/service-auth": "workspace:*",
     "@hono/node-server": "1.19.15",
     "hono": "4.13.9",
     "smol-toml": "1.9.0",
