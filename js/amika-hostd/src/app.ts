@@ -18,10 +18,15 @@ import {
 } from "./internal/requests.js";
 import {
   fromRequest,
+  hardenPreviewResponse,
   hardenServiceLinkResponse,
   type Gateway,
 } from "@amika/service-auth/gateway";
-import { CALLBACK_PATH, LOGIN_PATH } from "@amika/service-auth/credentials";
+import {
+  BROWSER_LOGIN_FEATURE,
+  CALLBACK_PATH,
+  LOGIN_PATH,
+} from "@amika/service-auth/credentials";
 import {
   hostdGateway,
   resolveHostPort,
@@ -50,8 +55,8 @@ export interface AppConfig {
    */
   requestTimeoutMs?: number;
   /**
-   * Amika's URL, where a browser is sent to log in
-   * (`@amika/service-auth/gateway`). Without it hostd logs no browser in.
+   * Amika's URL, where a browser opening a preview is sent to log in
+   * (`@amika/service-auth/gateway`). Without it hostd serves no previews.
    */
   amikaUrl?: string;
 }
@@ -147,9 +152,16 @@ export function createApp(
   // `apis` names the versioned APIs this daemon serves, so a control plane
   // can tell what a host speaks before relying on it.
   // `features` names what a control plane may rely on beyond the API itself:
-  // `service-tokens`, service routes accepting `X-Amika-Authorization`.
+  // `service-tokens`, service routes accepting `X-Amika-Authorization`, and
+  // `browser-login`, previews behind a login through Amika.
   app.get("/health", (c) =>
-    c.json({ status: "ok", apis: [API_VERSION], features: FEATURES }),
+    c.json({
+      status: "ok",
+      apis: [API_VERSION],
+      features: gateway.servesPreviews
+        ? [...FEATURES, BROWSER_LOGIN_FEATURE]
+        : FEATURES,
+    }),
   );
   // Service routes are registered first, so `/<rig>/services/<name>/...`
   // never falls through to a machine route.
@@ -175,11 +187,24 @@ export function createApp(
   app.all(`${RIGS_ROUTE}/:name/service-links/:service/:token/*`, (c) =>
     proxyService(c.req.raw, gateway, runtime, registry, fetcher),
   );
-  // Browser login through Amika; nothing needs its session yet.
   if (gateway.servesPreviews) {
     app.get(LOGIN_PATH, (c) => gateway.startLogin(c.req.raw));
     app.post(CALLBACK_PATH, bodyLimit({ maxSize: 16 * 1024 }), (c) =>
       gateway.finishLogin(c.req.raw),
+    );
+    // As for a link: a preview missing its trailing slash would resolve the
+    // service's relative URLs one segment up.
+    app.all(`${RIGS_ROUTE}/:name/previews/:service`, (c) => {
+      const url = new URL(c.req.url);
+      return hardenPreviewResponse(
+        new Response(null, {
+          status: 308,
+          headers: { Location: `${url.pathname}/${url.search}` },
+        }),
+      );
+    });
+    app.all(`${RIGS_ROUTE}/:name/previews/:service/*`, (c) =>
+      proxyService(c.req.raw, gateway, runtime, registry, fetcher),
     );
   }
   // The machine API, at its versioned path and at the unversioned path
@@ -329,6 +354,7 @@ async function proxyService(
     return Response.json({ error: "Not found" }, { status: 404 });
   }
   if (decision.kind === "refuse") return gateway.refusal(decision);
+  if (decision.kind === "login") return gateway.login(decision);
   const { route } = decision;
   const hostPort = await resolveHostPort(runtime, registry, route);
   if (hostPort === null) {

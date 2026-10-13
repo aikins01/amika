@@ -1,6 +1,6 @@
 /**
- * Browser login through Amika (KAPRO-1038), the gateway's side. The flow
- * and the credentials are described in `../credentials/browser-login.ts`.
+ * Browser login and previews (KAPRO-1038), the gateway's side. The flow and
+ * the credentials are described in `../credentials/browser-login.ts`.
  *
  * - `GET /__amika/login?return=<path>` (`startLogin`) remembers a random
  *   state and the path to return to in `__Host-amika-login`, then sends the
@@ -8,33 +8,50 @@
  * - `POST /__amika/callback` (`finishLogin`) takes the login pass Amika posts
  *   back, checks it against that state, and sets the session cookie,
  *   `__Host-amika-session`, before returning to the path.
- *
- * Previews, which the session opens, come next; for now nothing needs it.
+ * - `/v0beta1/rigs/<rig>/previews/<name>/<path>` (`parsePreviewPath`) serves
+ *   a service to a browser with a session. Without one, a page load (of the
+ *   preview, or a root-relative URL its cookie routes) is sent to log in and
+ *   back to the same path; anything else is refused.
+ * - Opening a preview also sets `__Host-amika-preview`, naming its rig and
+ *   service but no credential, so the page's root-relative URLs reach the
+ *   same service, as the link cookie does for links (`./link-cookie.ts`).
+ *   They need the session too.
  *
  * Every cookie is `__Host-` (Secure, `Path=/`, no `Domain`) and none is set
  * on a loopback address or an explicit port (`browserOrigin`), where every
  * other local server would receive it. The session is `SameSite=Lax`, so a
- * preview opened from Amika (another site) will carry it; `Strict` would
- * send every such click back to log in. The login state is `SameSite=None`:
- * it has to come back on Amika's cross-site form post, and holds nothing
- * but a random value and a path.
+ * preview opened from Amika (another site) carries it; `Strict` would send
+ * every such click back to log in. The login state is `SameSite=None`: it
+ * has to come back on Amika's cross-site form post, and holds nothing but a
+ * random value and a path.
  */
 import { randomBytes } from "node:crypto";
 import {
   CALLBACK_PATH,
   LOGIN_PASS_REPLAY_WINDOW_S,
   LOGIN_PATH,
+  PREVIEWS_SEGMENT,
   SESSION_TTL_S,
   STATE_PATTERN,
   signSession,
   verifyLoginPass,
+  verifySession,
 } from "../credentials";
 import {
+  LINK_COOKIE,
   LOGIN_STATE_COOKIE,
+  PREVIEW_COOKIE,
   SESSION_COOKIE,
   cookieValues,
+  expiredCookie,
   isLoopbackHost,
 } from "./link-cookie";
+import { dropCdnCachePolicies } from "./responses";
+import {
+  AMIKAD_SERVICE,
+  type GatewayRequest,
+  type ServiceRoute,
+} from "./routes";
 
 export { CALLBACK_PATH, LOGIN_PATH };
 
@@ -53,6 +70,19 @@ const MAX_RETURN_PATH_LENGTH = 2048;
 export function browserOrigin(url: URL): string | null {
   if (url.port !== "" || isLoopbackHost(url.hostname)) return null;
   return `https://${url.hostname}`;
+}
+
+/** Where to send a browser that wants `url` to log in, returning after. */
+export function loginLocation(url: URL): string {
+  const back = `${url.pathname}${url.search}`;
+  return `${LOGIN_PATH}?${new URLSearchParams({ return: back })}`;
+}
+
+/** The redirect to `location`, which no cache keeps. */
+export function loginRedirect(location: string): Response {
+  return noStore(
+    new Response(null, { status: 302, headers: { Location: location } }),
+  );
 }
 
 /**
@@ -160,6 +190,140 @@ export async function finishLogin(
     `${LOGIN_STATE_COOKIE}=; Path=/; Max-Age=0; HttpOnly; Secure; SameSite=None`,
   );
   return noStore(new Response(null, { status: 303, headers }));
+}
+
+/** Whether the request carries a live session for the origin it reached. */
+export async function hasSession(
+  cookieHeader: string | null | undefined,
+  url: URL,
+  secretKey: string,
+  nowS = Math.floor(Date.now() / 1000),
+): Promise<boolean> {
+  const origin = browserOrigin(url);
+  const token = cookieValues(cookieHeader).get(SESSION_COOKIE);
+  if (!origin || !token) return false;
+  const session = await verifySession(secretKey, token, { origin }, nowS);
+  return typeof session !== "string";
+}
+
+/**
+ * Split a preview path into its route, or null if it is not one. As in
+ * `parseServicePath`, the service name is decoded and the guest path kept
+ * encoded. amikad has no preview.
+ */
+export function parsePreviewPath(pathname: string): ServiceRoute | null {
+  const match = new RegExp(
+    `^/v0beta1/rigs/([a-zA-Z0-9][a-zA-Z0-9_-]*)/${PREVIEWS_SEGMENT}/([^/]+)(/.*)?$`,
+  ).exec(pathname);
+  if (!match) return null;
+  let service: string;
+  try {
+    service = decodeURIComponent(match[2]);
+  } catch {
+    return null;
+  }
+  if (service === AMIKAD_SERVICE) return null;
+  return { machine: match[1], service, path: match[3] ?? "/" };
+}
+
+/**
+ * The `Set-Cookie` values for the preview a browser just opened: its cookie,
+ * and the end of any link cookie, so the preview opened last owns the root.
+ * None for anything but a page load (a script or image loaded through a
+ * preview must not change which service owns the root) or where the gateway
+ * sets no cookies. The cookie names no credential: requests it routes need
+ * the session too.
+ */
+export function previewCookies(
+  request: Pick<GatewayRequest, "url" | "headers">,
+  route: Pick<ServiceRoute, "machine" | "service">,
+): string[] {
+  if (request.headers.get("sec-fetch-mode") !== "navigate") return [];
+  if (!browserOrigin(request.url)) return [];
+  const value = `${route.machine}/${encodeURIComponent(route.service)}`;
+  return [
+    `${PREVIEW_COOKIE}=${value}; Path=/; Max-Age=${SESSION_TTL_S}; HttpOnly; Secure; SameSite=Strict`,
+    expiredCookie(LINK_COOKIE),
+  ];
+}
+
+/**
+ * Whether a preview request is this origin's own, or a page load another
+ * site may start (a preview opened from Amika). The session is
+ * `SameSite=Lax`, which a sibling subdomain counts as the same site, so
+ * without this a page there could post to a preview with the session, or
+ * open its WebSocket and read it (no CORS covers a WebSocket). An upgrade
+ * must name this origin in `Origin`, which browsers always send on one.
+ * A browser too old to send `Sec-Fetch-Site` gets page loads only.
+ */
+export function isOwnOrPageLoad(
+  request: GatewayRequest,
+  { upgrade }: { upgrade: boolean },
+): boolean {
+  const { method, url, headers } = request;
+  if (upgrade) {
+    const origin = browserOrigin(url);
+    return origin !== null && headers.get("origin") === origin;
+  }
+  const site = headers.get("sec-fetch-site");
+  if (site === "same-origin" || site === "none") return true;
+  return (
+    headers.get("sec-fetch-mode") === "navigate" &&
+    (method === "GET" || method === "HEAD")
+  );
+}
+
+/**
+ * The preview a request's cookie names, or null when it names none, or the
+ * request is not the origin's own (`Sec-Fetch-Site: same-origin`, or `none`
+ * for one the user started), as for the link cookie.
+ */
+export function previewFromCookie(
+  cookieHeader: string | null | undefined,
+  fetchSite: string | string[] | null | undefined,
+): Pick<ServiceRoute, "machine" | "service"> | null {
+  if (fetchSite !== "same-origin" && fetchSite !== "none") return null;
+  const value = cookieValues(cookieHeader).get(PREVIEW_COOKIE);
+  const match = value && /^([a-zA-Z0-9][a-zA-Z0-9_-]*)\/([^/]+)$/.exec(value);
+  if (!match) return null;
+  let service: string;
+  try {
+    service = decodeURIComponent(match[2]);
+  } catch {
+    return null;
+  }
+  if (service === AMIKAD_SERVICE) return null;
+  return { machine: match[1], service };
+}
+
+/**
+ * Headers for every response on a preview. The URL carries no credential,
+ * so unlike a link's this lets the guest's own caching through, but always
+ * `private` (a shared cache must not keep a logged-in page), keeps search
+ * engines out, and keeps a service worker inside its own preview.
+ */
+export function hardenPreviewResponse(response: Response): Response {
+  const headers = response.headers;
+  dropCdnCachePolicies(headers);
+  headers.delete("service-worker-allowed");
+  headers.set(
+    "cache-control",
+    privateCacheControl(headers.get("cache-control")),
+  );
+  headers.set("x-robots-tag", "noindex");
+  return response;
+}
+
+/**
+ * `value` made `private`: `public` becomes `private`, and a policy naming
+ * neither (nor `no-store`) gains it. No policy at all becomes `private`.
+ */
+export function privateCacheControl(value: string | null): string {
+  if (!value?.trim()) return "private";
+  if (/\bpublic\b/i.test(value))
+    return value.replace(/\bpublic\b/gi, "private");
+  if (/\b(private|no-store)\b/i.test(value)) return value;
+  return `private, ${value}`;
 }
 
 /**

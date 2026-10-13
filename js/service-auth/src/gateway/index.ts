@@ -9,6 +9,7 @@ export {
   type GatewayDecision,
   type GatewayOptions,
   type GatewaySurface,
+  type LoginDecision,
   type RefuseDecision,
 } from "./gateway";
 export {
@@ -23,6 +24,7 @@ export {
 export {
   LINK_COOKIE,
   LOGIN_STATE_COOKIE,
+  PREVIEW_COOKIE,
   SESSION_COOKIE,
   carriesGatewayCookie,
   isLoopbackHost,
@@ -42,4 +44,9 @@ export {
   type ServiceLinkRoute,
   type ServiceRoute,
 } from "./routes";
-export { browserOrigin } from "./browser-login";
+export {
+  browserOrigin,
+  hardenPreviewResponse,
+  parsePreviewPath,
+  privateCacheControl,
+} from "./browser-login";
