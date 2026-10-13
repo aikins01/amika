@@ -4,8 +4,7 @@ import {
   signServiceToken,
 } from "@amika/sandbox/hostd-service-links";
 import { describe, expect, it, vi } from "vitest";
-import { execFileSync } from "node:child_process";
-import { createApp, shellArg } from "./app.js";
+import { createApp } from "./app.js";
 import { memoryServiceRegistry } from "./internal/service-registry.js";
 import {
   RuntimeError,
@@ -1065,37 +1064,8 @@ describe("service tokens", () => {
     expect(response.status).toBe(401);
     expect(await response.json()).toEqual({
       error: "Unauthorized",
-      hint: "Send a service token in X-Amika-Authorization: Bearer <token>, or run: amika service curl demo web /api/health",
+      hint: "Send a service token from Amika in X-Amika-Authorization: Bearer <token>.",
     });
-  });
-
-  // A service name is free text and a path may hold shell syntax, so the
-  // hint quotes each word: pasted, it runs as shown and nothing else.
-  it("quotes the hint's service and path as shell words", async () => {
-    const { app } = tokenHost();
-    const response = await app.request(
-      "/v0beta1/rigs/demo/services/Coding%20Agent/a;touch%20x",
-    );
-    const body = (await response.json()) as { hint?: string };
-    expect(body.hint).toMatch(
-      /run: amika service curl demo 'Coding Agent' '\/a;touch%20x'$/,
-    );
-  });
-
-  it.each([
-    "web",
-    "/api/health?x=1",
-    "Coding Agent",
-    "it's",
-    "$(touch pwned)",
-    "a;b|c&d`e`",
-    "line\nbreak",
-  ])("quotes %j so a shell reads it back unchanged", (value) => {
-    expect(
-      execFileSync("sh", ["-c", `printf %s ${shellArg(value)}`], {
-        encoding: "utf8",
-      }),
-    ).toBe(value);
   });
 
   // amikad controls the agent daemon: only the host key opens it.

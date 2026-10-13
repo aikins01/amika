@@ -678,8 +678,8 @@ service with its whole path as the guest path, HTTP and WebSocket upgrades
   works as a service token or the other way round. hostd refuses a token
   that claims to live longer, never accepts one for `amikad`, and strips
   the header before forwarding, HTTP and upgrades alike. A `401` on a
-  service route carries a `hint` naming `amika service curl`, except for
-  `amikad`. `GET /health` lists `service-tokens` in `features` so a control
+  service route carries a `hint` saying where a token goes, except for
+  `amikad`; it names no CLI command until the CLI has one. `GET /health` lists `service-tokens` in `features` so a control
   plane knows the host takes them (KAPRO-1038).
 - One request needs no key: the SSH WebSocket that `amika sandbox ssh`
   opens, exactly `GET .../services/amikad/v1/ssh-sessions` as an upgrade,

@@ -23,6 +23,7 @@ import {
   withoutLinkCookie,
   type LinkCookieClaim,
 } from "./internal/link-cookie.js";
+import { SERVICE_TOKEN_HEADER } from "@amika/sandbox/hostd-service-links";
 import {
   AMIKAD_SERVICE,
   SERVICE_KEY_HEADER,
@@ -424,8 +425,8 @@ async function proxyService(
 
 /**
  * What a refused caller on a service route should do next, for the `hint` of
- * its 401: someone running `curl` against a route with no credential gets the
- * command that adds one, and one whose token was refused is told to get a new
+ * its 401: someone running `curl` against a route with no credential is told
+ * where a token goes, and one whose token was refused that it needs a new
  * one. Nothing for amikad, which takes only the host key.
  */
 function tokenHint(
@@ -433,27 +434,11 @@ function tokenHint(
   token: string | null,
 ): { hint?: string } {
   if (!route || route.service === AMIKAD_SERVICE) return {};
-  const command = [
-    "amika service curl",
-    shellArg(route.machine),
-    shellArg(route.service),
-    shellArg(route.path),
-  ].join(" ");
   return {
     hint: token
-      ? `The service token is invalid or expired. Get a new one, or run: ${command}`
-      : `Send a service token in X-Amika-Authorization: Bearer <token>, or run: ${command}`,
+      ? `The service token is invalid or expired; get a new one from Amika.`
+      : `Send a service token from Amika in ${SERVICE_TOKEN_HEADER}: Bearer <token>.`,
   };
-}
-
-/**
- * `value` as one POSIX shell word, so a hint copied into a terminal runs as
- * shown: a service name is free text and a path may hold `;`, `$` or quotes.
- * Plain words stay bare; anything else is single-quoted.
- */
-export function shellArg(value: string): string {
-  if (/^[A-Za-z0-9_@%+=:,./-]+$/.test(value)) return value;
-  return `'${value.replace(/'/g, `'\\''`)}'`;
 }
 
 /**
