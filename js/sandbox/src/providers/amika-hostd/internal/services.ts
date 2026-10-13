@@ -120,15 +120,15 @@ export function hostdServices(
  * The name hostd routes each service by, in input order: the service's own
  * name, so a route never changes when other services do. hostd routes one
  * port per name, so a service declaring several ports is refused, as is a
- * name no URL can carry (`.` and `..` are dot segments, even
- * percent-encoded).
+ * name no URL can carry (an empty one, and `.` and `..`, which are dot
+ * segments even percent-encoded).
  */
 export function hostdServiceRoutes(
   services: SandboxService[],
 ): { name: string; port: number }[] {
   const ports = new Map<string, number>();
   for (const { name, containerPort } of services) {
-    if (name === "." || name === "..") {
+    if (name === "" || name === "." || name === "..") {
       throw new Error(
         `amika-hostd cannot route a service named ${JSON.stringify(name)}`,
       );

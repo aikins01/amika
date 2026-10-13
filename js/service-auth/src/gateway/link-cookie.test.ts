@@ -10,6 +10,12 @@ describe("isLoopbackHost", () => {
     "localhost",
     "LOCALHOST",
     "localhost.",
+    "localhost..",
+    "app.localhost..",
+    // Kept as domain names by the URL parser, so only the dots stand between
+    // them and their address.
+    "127.0.0.1..",
+    "0.0.0.0..",
     "app.localhost",
     "127.0.0.1",
     "127.1.2.3",
