@@ -27,6 +27,7 @@
  *
  * Only Web Crypto is used, so this runs wherever the provider does.
  */
+import { z } from "zod";
 import { fromBase64Url, signText, toBase64Url, verifyText } from "./signing";
 
 /** The hostd feature, in `GET /health`'s `features`, that serves previews. */
@@ -181,16 +182,22 @@ export function isBrowserLoginOrigin(url: string): boolean {
   return true;
 }
 
-interface Payload {
+/**
+ * What a pass or a session says. Strict, so a payload with anything more than
+ * Amika signs is refused rather than partly read.
+ */
+const payloadSchema = z.strictObject({
   /** The origin the credential is for. */
-  o: string;
+  o: z.string(),
   /** A pass's login state. */
-  s?: string;
+  s: z.string().optional(),
   /** The user's Amika id. */
-  u: string;
+  u: z.string(),
   /** Expiry, Unix seconds. */
-  e: number;
-}
+  e: z.int(),
+});
+
+type Payload = z.infer<typeof payloadSchema>;
 
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
@@ -227,14 +234,6 @@ async function verifyPayload(
   } catch {
     return "malformed";
   }
-  const { o, s, u, e } = (payload ?? {}) as Record<string, unknown>;
-  if (
-    typeof o !== "string" ||
-    typeof u !== "string" ||
-    (s !== undefined && typeof s !== "string") ||
-    !Number.isSafeInteger(e)
-  ) {
-    return "malformed";
-  }
-  return { o, s, u, e: e as number };
+  const parsed = payloadSchema.safeParse(payload);
+  return parsed.success ? parsed.data : "malformed";
 }

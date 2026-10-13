@@ -100,6 +100,23 @@ describe("login passes", () => {
     },
   );
 
+  // Correctly signed, so only the payload's shape can refuse them.
+  it.each([
+    ["an extra field", { o: ORIGIN, s: STATE, u: "u", e: NOW + 60, x: 1 }],
+    ["a missing user", { o: ORIGIN, s: STATE, e: NOW + 60 }],
+    ["a fractional expiry", { o: ORIGIN, s: STATE, u: "u", e: NOW + 0.5 }],
+    ["an array", [ORIGIN, STATE, "u", NOW + 60]],
+  ])("treats a signed payload with %s as malformed", async (_label, body) => {
+    const key = createHmac("sha256", SECRET)
+      .update("amika-hostd login passes v1")
+      .digest();
+    const payload = Buffer.from(JSON.stringify(body)).toString("base64url");
+    const signature = createHmac("sha256", key)
+      .update(payload)
+      .digest("base64url");
+    expect(await verify(`${payload}.${signature}`)).toBe("malformed");
+  });
+
   it("refuses to sign for a malformed state", async () => {
     await expect(
       signLoginPass(SECRET, { ...PASS, state: "short" }, NOW),
