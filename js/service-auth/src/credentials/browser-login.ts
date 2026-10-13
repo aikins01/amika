@@ -133,15 +133,15 @@ export async function verifySession(
 /**
  * The path of a preview, ending in `/` so the service's relative URLs
  * resolve under it. The rig name is a hostd machine name (URL-safe); the
- * service name is percent-encoded as one segment, and may not be `.` or `..`,
- * which no encoding keeps from resolving as a step up the path.
+ * service name is percent-encoded as one segment, and may not be empty, `.`
+ * or `..`, which no encoding keeps a segment of its own.
  */
 export function previewPath(
   rigsPath: string,
   rig: string,
   service: string,
 ): string {
-  if (service === "." || service === "..") {
+  if (service === "" || service === "." || service === "..") {
     throw new Error(`Invalid service name: ${service}`);
   }
   return `${rigsPath}/${rig}/${PREVIEWS_SEGMENT}/${encodeURIComponent(service)}/`;
@@ -156,7 +156,8 @@ export function previewPath(
  * The exact spelling matters because credentials name the origin as a string
  * and the browser's origin is always canonical: a host registered as
  * `https://Preview.example:443?` would pass every other check here and still
- * never log anyone in.
+ * never log anyone in. That includes an internationalized hostname, which
+ * must be registered in its punycode spelling (`xn--…`).
  */
 export function isBrowserLoginOrigin(url: string): boolean {
   let parsed: URL;
@@ -230,11 +231,13 @@ const encoder = new TextEncoder();
 const decoder = new TextDecoder();
 
 async function signPayload<Schema extends z.ZodType>(
-  { label }: CredentialKind<Schema>,
+  { label, schema }: CredentialKind<Schema>,
   secretKey: string,
   payload: z.infer<Schema>,
 ): Promise<string> {
-  const encoded = toBase64Url(encoder.encode(JSON.stringify(payload)));
+  // Never sign what `verifyPayload` would refuse, a fractional time say.
+  const checked = schema.parse(payload);
+  const encoded = toBase64Url(encoder.encode(JSON.stringify(checked)));
   return `${encoded}.${await signText(label, secretKey, encoded)}`;
 }
 

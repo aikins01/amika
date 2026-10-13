@@ -141,6 +141,11 @@ describe("login passes", () => {
       signLoginPass(SECRET, { ...PASS, state: "short" }, NOW),
     ).rejects.toThrow("state");
   });
+
+  it("refuses to sign what it could not verify", async () => {
+    await expect(signLoginPass(SECRET, PASS, NOW + 0.5)).rejects.toThrow();
+    await expect(signSession(SECRET, PASS, NOW + 0.5)).rejects.toThrow();
+  });
 });
 
 describe("sessions", () => {
@@ -193,7 +198,7 @@ describe("previewPath", () => {
     );
   });
 
-  it.each([".", ".."])("refuses %j, which would step up the path", (name) => {
+  it.each(["", ".", ".."])("refuses %j, not a segment of its own", (name) => {
     expect(() => previewPath("/v0beta1/rigs", "demo", name)).toThrow(
       "Invalid service name",
     );
@@ -228,12 +233,19 @@ describe("isBrowserLoginOrigin", () => {
     ["localhost with trailing dots", "https://localhost.."],
     ["a loopback address with trailing dots", "https://127.0.0.1.."],
     ["a loopback address", "https://127.0.0.1"],
-    ["an odd loopback spelling", "https://0x7f.1"],
+    ["a loopback address at the top of its range", "https://127.255.255.254"],
     ["the unspecified address", "https://0.0.0.0"],
     ["IPv6 loopback", "https://[::1]"],
     ["the IPv6 unspecified address", "https://[::]"],
     ["the IPv4-mapped unspecified address", "https://[::ffff:0:0]"],
-    ["IPv4-mapped loopback", "https://[::ffff:127.0.0.1]"],
+    ["IPv4-mapped loopback", "https://[::ffff:7f00:1]"],
+    [
+      "IPv4-mapped loopback at the top of its range",
+      "https://[::ffff:7fff:ffff]",
+    ],
+    // Refused for their spelling before their address is looked at.
+    ["a non-canonical loopback spelling", "https://0x7f.1"],
+    ["a non-canonical IPv4-mapped spelling", "https://[::ffff:127.0.0.1]"],
     ["not a URL", "preview.example"],
   ])("refuses %s", (_label, url) => {
     expect(isBrowserLoginOrigin(url)).toBe(false);
