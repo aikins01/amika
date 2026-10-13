@@ -110,6 +110,12 @@ describe("service links", () => {
       serviceLinkPath("/v0beta1/rigs", "demo", "Coding Agent/v2", "1.sig"),
     ).toBe("/v0beta1/rigs/demo/service-links/Coding%20Agent%2Fv2/1.sig/");
   });
+
+  it.each(["", ".", ".."])("refuses %j, not a segment of its own", (name) => {
+    expect(() =>
+      serviceLinkPath("/v0beta1/rigs", "demo", name, "1.sig"),
+    ).toThrow("Invalid service name");
+  });
 });
 
 describe("service tokens", () => {

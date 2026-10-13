@@ -189,7 +189,8 @@ async function verify(
 /**
  * The path of a service link, ending in `/` so the service's relative URLs
  * resolve under it. The rig name is a hostd machine name (URL-safe); the
- * service name is percent-encoded as one segment.
+ * service name is percent-encoded as one segment, and may not be empty, `.`
+ * or `..`, which no encoding keeps a segment of its own.
  */
 export function serviceLinkPath(
   rigsPath: string,
@@ -197,6 +198,9 @@ export function serviceLinkPath(
   service: string,
   token: string,
 ): string {
+  if (service === "" || service === "." || service === "..") {
+    throw new Error(`Invalid service name: ${service}`);
+  }
   return `${rigsPath}/${rig}/${SERVICE_LINKS_SEGMENT}/${encodeURIComponent(service)}/${token}/`;
 }
 

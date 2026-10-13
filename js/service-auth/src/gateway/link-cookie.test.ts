@@ -10,6 +10,8 @@ describe("isLoopbackHost", () => {
     "localhost",
     "LOCALHOST",
     "localhost.",
+    "localhost..",
+    "app.localhost..",
     "app.localhost",
     "127.0.0.1",
     "127.1.2.3",
