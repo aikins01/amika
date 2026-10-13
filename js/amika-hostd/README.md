@@ -5,8 +5,7 @@ Bring your own compute (BYOC): run Amika Rigs on your own machines.
 `amika-hostd` is a daemon you install on a machine you control. It registers
 that machine with the Amika control plane as a _host_, and runs each Rig on it
 as a local VM. You keep using the same `amika` CLI and web UI: a Rig created
-with `--host <hostname>` runs on your hardware instead of Amika Cloud. The
-TypeScript SDK reports which host a rig is on, but cannot create one there yet.
+with `--host <hostname>` runs on your hardware instead of Amika Cloud.
 
 The VMs and their disks stay on your machine. Creating and managing a rig goes
 through Amika, which authenticates the request and forwards it to your daemon.
