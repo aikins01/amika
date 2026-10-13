@@ -24,13 +24,16 @@ import {
   type LinkCookieClaim,
 } from "./internal/link-cookie.js";
 import {
+  AMIKAD_SERVICE,
   SERVICE_KEY_HEADER,
+  SERVICE_TOKEN_HEADER_NAME,
   authorizeServiceLinkRequest,
-  authorizeServiceRequest,
+  authorizeServiceRouteRequest,
   parseServiceLinkPath,
   parseServicePath,
   resolveHostPort,
   stripHopByHopHeaders,
+  type ServiceRoute,
 } from "./internal/services.js";
 import {
   memoryServiceRegistry,
@@ -150,7 +153,11 @@ export function createApp(
   );
   // `apis` names the versioned APIs this daemon serves, so a control plane
   // can tell what a host speaks before relying on it.
-  app.get("/health", (c) => c.json({ status: "ok", apis: [API_VERSION] }));
+  // `features` names what a control plane may rely on beyond the API itself:
+  // `service-tokens`, service routes accepting `X-Amika-Authorization`.
+  app.get("/health", (c) =>
+    c.json({ status: "ok", apis: [API_VERSION], features: FEATURES }),
+  );
   // Service routes are registered first, so `/<rig>/services/<name>/...`
   // never falls through to a machine route.
   app.all(`${RIGS_ROUTE}/:name/services/:service/*`, (c) =>
@@ -320,6 +327,7 @@ export const DEFAULT_REQUEST_TIMEOUT_MS = 300_000;
 
 /** The versioned API this daemon serves. */
 export const API_VERSION = "v0beta1";
+export const FEATURES = ["service-tokens"];
 const RIGS_ROUTE = `/${API_VERSION}/rigs`;
 /** The Smol-compatible machine API, served until no control plane needs it. */
 const LEGACY_MACHINES_ROUTE = "/api/v1/machines";
@@ -346,15 +354,17 @@ async function proxyService(
     : parseServiceLinkPath(url.pathname);
   const headers = {
     key: request.headers.get(SERVICE_KEY_HEADER),
+    token: request.headers.get(SERVICE_TOKEN_HEADER_NAME),
     authorization: request.headers.get("authorization"),
   };
+  const serviceRoute = link ? null : parseServicePath(url.pathname);
   const refusal = link
     ? await authorizeServiceLinkRequest(secretKey, link, headers)
-    : authorizeServiceRequest(secretKey, headers);
+    : await authorizeServiceRouteRequest(secretKey, serviceRoute, headers);
   if (refusal === 401) {
     // Close the connection so Node stops reading an unauthenticated body.
     return Response.json(
-      { error: "Unauthorized" },
+      { error: "Unauthorized", ...tokenHint(serviceRoute, headers.token) },
       { status: 401, headers: { Connection: "close" } },
     );
   }
@@ -366,7 +376,7 @@ async function proxyService(
       { status: 400 },
     );
   }
-  const route = link ?? parseServicePath(url.pathname);
+  const route = link ?? serviceRoute;
   const hostPort = route && (await resolveHostPort(runtime, registry, route));
   if (!route || hostPort === null) {
     return Response.json({ error: "Not found" }, { status: 404 });
@@ -374,6 +384,7 @@ async function proxyService(
   const forwarded = new Headers(request.headers);
   stripHopByHopHeaders(forwarded);
   forwarded.delete(SERVICE_KEY_HEADER);
+  forwarded.delete(SERVICE_TOKEN_HEADER_NAME);
   forwarded.delete("host");
   const guestCookies = withoutLinkCookie(forwarded.get("cookie"));
   if (guestCookies) forwarded.set("cookie", guestCookies);
@@ -409,6 +420,25 @@ async function proxyService(
     statusText: upstream.statusText,
     headers: responseHeaders,
   });
+}
+
+/**
+ * What a refused caller on a service route should do next, for the `hint` of
+ * its 401: someone running `curl` against a route with no credential gets the
+ * command that adds one, and one whose token was refused is told to get a new
+ * one. Nothing for amikad, which takes only the host key.
+ */
+function tokenHint(
+  route: ServiceRoute | null,
+  token: string | null,
+): { hint?: string } {
+  if (!route || route.service === AMIKAD_SERVICE) return {};
+  const command = `amika service curl ${route.machine} ${route.service} ${route.path}`;
+  return {
+    hint: token
+      ? `The service token is invalid or expired. Get a new one, or run: ${command}`
+      : `Send a service token in X-Amika-Authorization: Bearer <token>, or run: ${command}`,
+  };
 }
 
 /**

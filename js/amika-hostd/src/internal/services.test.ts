@@ -9,7 +9,10 @@ import {
   type Socket,
 } from "node:net";
 import type { Duplex } from "node:stream";
-import { signServiceLink } from "@amika/sandbox/hostd-service-links";
+import {
+  signServiceLink,
+  signServiceToken,
+} from "@amika/sandbox/hostd-service-links";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { memoryServiceRegistry } from "./service-registry.js";
 import {
@@ -303,12 +306,15 @@ describe("createUpgradeHandler", () => {
       upgrade = "websocket",
       cookie = "",
       fetchSite = "same-origin",
+      token = "",
     } = {},
   ): Promise<Socket> {
     const socket = connect(port, "127.0.0.1");
     closers.push(() => socket.destroy());
     await once(socket, "connect");
-    const keyLine = key ? `X-Amika-Hostd-Key: ${key}\r\n` : "";
+    const keyLine =
+      (key ? `X-Amika-Hostd-Key: ${key}\r\n` : "") +
+      (token ? `X-Amika-Authorization: Bearer ${token}\r\n` : "");
     const cookieLine = cookie
       ? `Cookie: ${cookie}\r\nSec-Fetch-Site: ${fetchSite}\r\n`
       : "";
@@ -462,6 +468,45 @@ describe("createUpgradeHandler", () => {
       const socket = await open(port, await linkPath(), { key: "" });
       expect(await read(socket)).toMatch(/^HTTP\/1\.1 404 /);
     });
+  });
+
+  describe("with a service token", () => {
+    const tokenFor = (service: string) =>
+      signServiceToken(SECRET, { rig: "demo", service });
+
+    it("tunnels it with no key, keeping the token off the guest", async () => {
+      const target = await guest();
+      const { port } = await hostd(target.port, { services: { web: 5173 } });
+      const socket = await open(port, "/v0beta1/rigs/demo/services/web/hmr", {
+        key: "",
+        token: await tokenFor("web"),
+      });
+      expect(await read(socket)).toBe(
+        "HTTP/1.1 101 Switching Protocols\r\n\r\n",
+      );
+      expect(target.handshake()).toMatch(/^GET \/hmr HTTP\/1\.1\r\n/);
+      expect(target.handshake()).not.toMatch(/x-amika-authorization/i);
+    });
+
+    it.each([
+      ["another service's token", "web", "api"],
+      ["a token for amikad", "amikad", "amikad"],
+    ])(
+      "refuses %s without reaching the guest",
+      async (_label, service, signedFor) => {
+        const target = await guest();
+        const { port } = await hostd(target.port, {
+          services: { web: 5173, api: 8080, amikad: 60999 },
+        });
+        const socket = await open(
+          port,
+          `/v0beta1/rigs/demo/services/${service}/v1/other`,
+          { key: "", token: await tokenFor(signedFor) },
+        );
+        expect(await read(socket)).toMatch(/^HTTP\/1\.1 401 /);
+        expect(target.handshake()).toBe("");
+      },
+    );
   });
 
   describe("through the link cookie", () => {

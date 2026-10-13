@@ -1,5 +1,8 @@
 /** Exercise the daemon's HTTP boundary with an injected machine runtime. */
-import { signServiceLink } from "@amika/sandbox/hostd-service-links";
+import {
+  signServiceLink,
+  signServiceToken,
+} from "@amika/sandbox/hostd-service-links";
 import { describe, expect, it, vi } from "vitest";
 import { createApp } from "./app.js";
 import { memoryServiceRegistry } from "./internal/service-registry.js";
@@ -103,6 +106,7 @@ describe("machine API", () => {
     expect(await (await app.request("/health")).json()).toEqual({
       status: "ok",
       apis: ["v0beta1"],
+      features: ["service-tokens"],
     });
     expectUntouched(runtime);
   });
@@ -984,6 +988,120 @@ describe("service routes", () => {
     expect((await request(`${ROOT}/demo`)).status).toBe(401);
     expectUntouched(runtime);
     expect(fetcher).not.toHaveBeenCalled();
+  });
+});
+
+describe("service tokens", () => {
+  const HOST_PORT = 41001;
+
+  /** A host whose `demo` rig serves `web` and amikad; no host key is sent. */
+  function tokenHost(...responses: Response[]) {
+    const runtime = fakeRuntime();
+    runtime.hostPort.mockResolvedValue(HOST_PORT);
+    const fetcher = vi.fn<typeof fetch>(async () => {
+      const response = responses.shift();
+      if (!response) throw new Error("Unexpected request");
+      return response;
+    });
+    const registry = memoryServiceRegistry();
+    registry.set("demo", { amikad: 60999, web: 3000 });
+    const app = createApp({ secretKey: SECRET }, runtime, {
+      registry,
+      fetch: fetcher,
+    });
+    return { app, fetcher };
+  }
+
+  const tokenFor = (service: string, opts?: { ttlS?: number; nowS?: number }) =>
+    signServiceToken(SECRET, { rig: "demo", service }, opts);
+
+  it("forwards a request carrying a token for its service, without the token", async () => {
+    const { app, fetcher } = tokenHost(new Response("ok"));
+    const response = await app.request("/v0beta1/rigs/demo/services/web/api", {
+      headers: {
+        "X-Amika-Authorization": `Bearer ${await tokenFor("web")}`,
+        Authorization: "Bearer the-guest's-own",
+      },
+    });
+    expect(response.status).toBe(200);
+    const headers = new Headers(fetcher.mock.calls[0][1]?.headers);
+    // The token is hostd's; the guest's own credential passes untouched.
+    expect(headers.get("x-amika-authorization")).toBeNull();
+    expect(headers.get("authorization")).toBe("Bearer the-guest's-own");
+  });
+
+  it.each([
+    ["another service's token", () => tokenFor("other")],
+    [
+      "an expired token",
+      () => tokenFor("web", { nowS: Math.floor(Date.now() / 1000) - 7200 }),
+    ],
+    [
+      "a service link's token",
+      () =>
+        signServiceLink(SECRET, {
+          rig: "demo",
+          service: "web",
+          expiresAt: Math.floor(Date.now() / 1000) + 600,
+        }),
+    ],
+  ])("refuses %s, saying to get a new one", async (_label, token) => {
+    const { app, fetcher } = tokenHost();
+    const response = await app.request("/v0beta1/rigs/demo/services/web/", {
+      headers: { "X-Amika-Authorization": `Bearer ${await token()}` },
+    });
+    expect(response.status).toBe(401);
+    const body = (await response.json()) as { hint?: string };
+    expect(body.hint).toMatch(/invalid or expired/);
+    expect(fetcher).not.toHaveBeenCalled();
+  });
+
+  it("tells a caller with no credential what to run", async () => {
+    const { app } = tokenHost();
+    const response = await app.request(
+      "/v0beta1/rigs/demo/services/web/api/health",
+    );
+    expect(response.status).toBe(401);
+    expect(await response.json()).toEqual({
+      error: "Unauthorized",
+      hint: "Send a service token in X-Amika-Authorization: Bearer <token>, or run: amika service curl demo web /api/health",
+    });
+  });
+
+  // amikad controls the agent daemon: only the host key opens it.
+  it("never lets a token reach amikad", async () => {
+    const { app, fetcher } = tokenHost();
+    const response = await app.request("/v0beta1/rigs/demo/services/amikad/", {
+      headers: {
+        "X-Amika-Authorization": `Bearer ${await tokenFor("amikad")}`,
+      },
+    });
+    expect(response.status).toBe(401);
+    expect(await response.json()).toEqual({ error: "Unauthorized" });
+    expect(fetcher).not.toHaveBeenCalled();
+  });
+
+  it("still refuses the host key sent as the guest's Authorization", async () => {
+    const { app } = tokenHost();
+    const response = await app.request("/v0beta1/rigs/demo/services/web/", {
+      headers: {
+        "X-Amika-Authorization": `Bearer ${await tokenFor("web")}`,
+        Authorization: `Bearer ${SECRET}`,
+      },
+    });
+    expect(response.status).toBe(400);
+  });
+
+  it("keeps the token header off the guest on the keyed route too", async () => {
+    const { app, fetcher } = tokenHost(new Response("ok"));
+    await app.request("/v0beta1/rigs/demo/services/web/", {
+      headers: {
+        "X-Amika-Hostd-Key": SECRET,
+        "X-Amika-Authorization": "Bearer anything",
+      },
+    });
+    const headers = new Headers(fetcher.mock.calls[0][1]?.headers);
+    expect(headers.get("x-amika-authorization")).toBeNull();
   });
 });
 

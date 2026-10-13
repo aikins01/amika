@@ -17,6 +17,13 @@
  * The one exception is amikad's SSH WebSocket (`isAmikadSshUpgrade`), which
  * the user's CLI opens directly with a connect token amikad verifies.
  *
+ * A caller without the key (`curl`, a script) may instead present a service
+ * token in `X-Amika-Authorization: Bearer <token>`: one rig's one service,
+ * for at most a day, minted by the control plane from the same secret key
+ * (`@amika/sandbox/hostd-service-links`). hostd removes that header before
+ * forwarding too, so the guest never sees it. amikad never accepts one: its
+ * routes control the agent daemon.
+ *
  * Browsers reach a service through a signed service link instead,
  * `/v0beta1/rigs/<machine>/service-links/<name>/<expiry>.<signature>/<path>`,
  * which the control plane mints from the same secret key and hostd verifies
@@ -28,7 +35,11 @@
 import type { IncomingMessage } from "node:http";
 import { connect, type Socket } from "node:net";
 import type { Duplex } from "node:stream";
-import { verifyServiceLink } from "@amika/sandbox/hostd-service-links";
+import {
+  SERVICE_TOKEN_HEADER,
+  verifyServiceLink,
+  verifyServiceToken,
+} from "@amika/sandbox/hostd-service-links";
 import { secretMatches } from "./auth.js";
 import {
   LINK_COOKIE,
@@ -41,6 +52,9 @@ import type { MachineRuntime } from "./machine-runtime.js";
 
 /** Carries the host's secret key on service routes; never forwarded. */
 export const SERVICE_KEY_HEADER = "x-amika-hostd-key";
+
+/** Carries a service token on service routes; never forwarded. */
+export const SERVICE_TOKEN_HEADER_NAME = SERVICE_TOKEN_HEADER.toLowerCase();
 
 /** amikad's service name and guest port, as Amika registers them. */
 export const AMIKAD_SERVICE = "amikad";
@@ -88,6 +102,7 @@ export function createUpgradeHandler(
     const route = link ?? parseServicePath(url.pathname);
     const headers = {
       key: request.headers[SERVICE_KEY_HEADER],
+      token: request.headers[SERVICE_TOKEN_HEADER_NAME],
       authorization: request.headers.authorization,
     };
     // amikad's SSH upgrade may skip the key; a keyed request is the control
@@ -99,7 +114,9 @@ export function createUpgradeHandler(
       authorizeServiceRequest(secretKey, headers) === 401;
     const refusal = link
       ? await authorizeServiceLinkRequest(secretKey, link, headers)
-      : authorizeServiceRequest(secretKey, headers, { requireKey: !keyless });
+      : await authorizeServiceRouteRequest(secretKey, route, headers, {
+          requireKey: !keyless,
+        });
     if (refusal) return refuse(socket, refusal);
     if (!route) return refuse(socket, 404);
     // Only the rig's own amikad, on the port Amika registers it at, answers
@@ -167,15 +184,20 @@ export function isAmikadSshUpgrade(
  * The handshake as the guest should see it: the guest path in place of the
  * service route, and every header exactly as the caller sent it, including
  * `Host`, `Origin`, and the `Authorization` the guest authenticates. Only
- * hostd's own key, its link cookie, and `Proxy-Authorization` are dropped:
- * each was meant for hostd or a proxy in front of it, never for the guest.
+ * hostd's own key, a service token, its link cookie, and
+ * `Proxy-Authorization` are dropped: each was meant for hostd or a proxy in
+ * front of it, never for the guest.
  */
 function requestHead(request: IncomingMessage, path: string): string {
   const lines = [`${request.method} ${path} HTTP/${request.httpVersion}`];
   for (let i = 0; i < request.rawHeaders.length; i += 2) {
     const name = request.rawHeaders[i];
     const lower = name.toLowerCase();
-    if (lower === "proxy-authorization" || lower === SERVICE_KEY_HEADER) {
+    if (
+      lower === "proxy-authorization" ||
+      lower === SERVICE_KEY_HEADER ||
+      lower === SERVICE_TOKEN_HEADER_NAME
+    ) {
       continue;
     }
     if (lower === "cookie" && request.rawHeaders[i + 1].includes(LINK_COOKIE)) {
@@ -223,6 +245,43 @@ export function authorizeServiceRequest(
       ? headers.authorization.replace(/^Bearer\s+/i, "").trim()
       : "";
   return authorization && secretMatches(authorization, secretKey) ? 400 : null;
+}
+
+/**
+ * Why a request on a service route is refused, or null to let it through: as
+ * `authorizeServiceRequest`, except that a caller without the key may present
+ * a service token for exactly this route's rig and service instead. amikad
+ * never takes a token.
+ */
+export async function authorizeServiceRouteRequest(
+  secretKey: string,
+  route: Pick<ServiceRoute, "machine" | "service"> | null,
+  headers: {
+    key?: string | string[] | null;
+    token?: string | string[] | null;
+    authorization?: string | string[] | null;
+  },
+  { requireKey = true }: { requireKey?: boolean } = {},
+  nowS = Math.floor(Date.now() / 1000),
+): Promise<400 | 401 | null> {
+  const keyed = authorizeServiceRequest(secretKey, headers, { requireKey });
+  if (keyed !== 401) return keyed;
+  const token = bearerToken(headers.token);
+  if (!token || !route || route.service === AMIKAD_SERVICE) return 401;
+  const problem = await verifyServiceToken(
+    secretKey,
+    { rig: route.machine, service: route.service, token },
+    nowS,
+  );
+  if (problem) return 401;
+  return authorizeServiceRequest(secretKey, headers, { requireKey: false });
+}
+
+/** The token in `Bearer <token>`, or "" when the header holds none. */
+export function bearerToken(header: string | string[] | null | undefined) {
+  if (typeof header !== "string") return "";
+  const match = /^Bearer\s+(\S+)\s*$/i.exec(header.trim());
+  return match ? match[1] : "";
 }
 
 /** A parsed service route. */
