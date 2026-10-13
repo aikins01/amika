@@ -183,6 +183,8 @@ describe("isBrowserLoginOrigin", () => {
     ["plain http", "http://preview.example"],
     ["an explicit port", "https://preview.example:8443"],
     ["a path", "https://example.com/hostd/"],
+    ["a query", "https://preview.example?tenant=x"],
+    ["a fragment", "https://preview.example/#x"],
     ["localhost", "https://localhost"],
     ["a localhost subdomain", "https://a.localhost"],
     ["a loopback address", "https://127.0.0.1"],

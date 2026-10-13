@@ -144,10 +144,11 @@ export function previewPath(
 }
 
 /**
- * Whether a host registered at `url` can log browsers in: https, the default
- * port, no path, and a hostname that is not this machine's own (`localhost`,
- * loopback and unspecified addresses, including IPv4-mapped ones). The URL
- * parser has already turned odd IPv4 spellings into dotted ones.
+ * Whether a host registered at `url` can log browsers in: a bare origin
+ * (https, the default port, no path, query or fragment) whose hostname is not
+ * this machine's own (`localhost`, loopback and unspecified addresses,
+ * including IPv4-mapped ones). The URL parser has already turned odd IPv4
+ * spellings into dotted ones.
  */
 export function isBrowserLoginOrigin(url: string): boolean {
   let parsed: URL;
@@ -160,6 +161,8 @@ export function isBrowserLoginOrigin(url: string): boolean {
     parsed.protocol !== "https:" ||
     parsed.port !== "" ||
     parsed.pathname !== "/" ||
+    parsed.search ||
+    parsed.hash ||
     parsed.username ||
     parsed.password
   ) {
