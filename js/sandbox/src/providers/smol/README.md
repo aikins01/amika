@@ -100,7 +100,9 @@ by name; see `js/amika-hostd/AGENTS.md`.)
 
 SSH access, streamed output, snapshots, and automatic stop/delete timers are
 not implemented; omit timers (or set them to zero). Nonzero timers fail before
-a VM is created.
+a VM is created. (The `amika-hostd` provider does support snapshots, because
+hostd packs a machine and keeps the artifact itself; this provider only boots
+one, through `from`. See `js/amika-hostd/AGENTS.md`.)
 
 Listings cover the runtime's machines, including machines created outside
 Amika. Smol has no provider label support: `labels` are not persisted and

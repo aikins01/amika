@@ -19,6 +19,7 @@ import {
   hostdServiceRoutes,
   hostdServices,
 } from "./internal/services";
+import { HOSTD_SNAPSHOTS_PATH, hostdSnapshots } from "./internal/snapshots";
 
 // Callers of amikad's hostd service URL (the control plane) must present the
 // host's secret key in this header; every other service URL is a signed link
@@ -62,16 +63,20 @@ const createProvider = defineProvider(
       apiUrl: config.apiUrl ?? "http://127.0.0.1:3020",
       requestTimeoutMs: config.requestTimeoutMs ?? 310_000,
     };
-    const client = new SmolClient(
+    const authenticated = withSecretKey(secretKey, fetcher);
+    const client = new SmolClient(smolConfig, authenticated, HOSTD_RIGS_PATH);
+    // The host's snapshots are its own collection, not a rig's, so they need
+    // a client addressing that path rather than `/v0beta1/rigs`.
+    const snapshotClient = new SmolClient(
       smolConfig,
-      withSecretKey(secretKey, fetcher),
-      HOSTD_RIGS_PATH,
+      authenticated,
+      HOSTD_SNAPSHOTS_PATH,
     );
     // hostd's own `/health`, outside the rig API, with a short deadline: it
     // only decides which URLs services get.
     const health = new SmolClient(
       { ...smolConfig, requestTimeoutMs: HEALTH_TIMEOUT_MS },
-      withSecretKey(secretKey, fetcher),
+      authenticated,
       "",
     );
     const ops = smolOperations(smolConfig, client, {
@@ -117,6 +122,7 @@ const createProvider = defineProvider(
         client,
         async () => (await health.json("/health", healthSchema)).features,
       ),
+      snapshots: hostdSnapshots({ rigs: client, snapshots: snapshotClient }),
     };
   },
 );

@@ -181,6 +181,31 @@ disk_grow_only = true
     expect(() => resolveConfig({ file: file(table) })).toThrow(message);
   });
 
+  describe("snapshot_dir", () => {
+    it("is unset by default, leaving the daemon's state directory", () => {
+      expect(resolveConfig({}).snapshotDir).toBeUndefined();
+    });
+
+    it("takes the environment over the file, and normalizes the path", () => {
+      expect(
+        resolveConfig({ file: file('snapshot_dir = "/srv/snapshots/"') })
+          .snapshotDir,
+      ).toBe("/srv/snapshots");
+      expect(
+        resolveConfig({
+          env: { AMIKA_HOSTD_SNAPSHOT_DIR: " /mnt/big/snapshots " },
+          file: file('snapshot_dir = "/srv/snapshots"'),
+        }).snapshotDir,
+      ).toBe("/mnt/big/snapshots");
+    });
+
+    it("refuses a relative path, which would depend on where `up` ran", () => {
+      expect(() =>
+        resolveConfig({ file: file('snapshot_dir = "snapshots"') }),
+      ).toThrow(/Invalid snapshot_dir/);
+    });
+  });
+
   it("reads image references from the [preset_images] table", () => {
     const config = resolveConfig({
       file: file(`

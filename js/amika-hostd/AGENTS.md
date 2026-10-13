@@ -3,7 +3,8 @@
 `@amika/hostd` is a standalone Node.js service built with Hono. It will manage
 local VMs and make them accessible through the Amika control plane. The current
 daemon serves `GET /health`, the versioned rig API under `/v0beta1/rigs`
-(machines and their named services), the Smol-compatible `/api/v1/machines`
+(machines and their named services), the snapshots a host holds under
+`/v0beta1/snapshots`, the Smol-compatible `/api/v1/machines`
 API for older control planes, and
 registers itself with the Amika control plane when started with `up`. `up`
 also starts the `smolvm serve` process the API runs machines on (through the
@@ -462,6 +463,7 @@ the first source that sets it: CLI flag, then environment, then TOML file.
 | Secret store |          | `AMIKA_HOSTD_SECRET_STORE`                    | `secret_store`                 | `keychain`              |
 | Bind host    | `--host` | `AMIKA_HOSTD_HOST`                            | `host`                         | `127.0.0.1`             |
 | Port         | `--port` | `AMIKA_HOSTD_PORT`                            | `port`                         | `3020`                  |
+| Snapshot dir |          | `AMIKA_HOSTD_SNAPSHOT_DIR`                    | `snapshot_dir`                 | in the state directory  |
 
 Setting both names of an aliased pair to different values is an error, never a
 silent pick. A blank variable (empty, or only whitespace) sets nothing; code
@@ -756,6 +758,76 @@ noindex`, but keep the guest's own caching, made `private`: the URL is
   could still set a cookie where none is held, as a host is one trusted
   unit.
 
+## Snapshots
+
+A snapshot is a rig's disks packed into a `.smolmachine` file on this host,
+which a later rig boots from. They stay on the host: an org's rigs on its own
+hardware never leave it, and neither do their snapshots.
+
+```
+POST   /v0beta1/rigs/<rig>/snapshots   {"name": "<org>/sandbox/<label>"} -> 202
+GET    /v0beta1/snapshots                     every snapshot this host holds
+GET    /v0beta1/snapshots/<name>              one, or 404
+DELETE /v0beta1/snapshots/<name>              204, idempotent
+```
+
+`src/internal/snapshots.ts` takes one: stop the rig, run `smolvm pack create
+--from-vm <rig> -o <staged>`, adopt the `.smolmachine` it writes beside that
+stub. `src/internal/snapshot-store.ts` keeps them.
+
+- **Why a pack, and not a checkpoint.** smolvm can also capture a running
+  machine (`POST /machines/<name>/checkpoint`), which is one atomic call and
+  needs no stop. It captures guest RAM as well as disks, which is wrong for
+  Amika's snapshots in two ways: the control plane scrubs a rig's credentials
+  before capturing, and a RAM image carries the secrets the scrubbed
+  processes still hold; and a checkpoint restores only onto its captured
+  CPU/memory/disk topology, while a snapshot is a base image new rigs of any
+  size boot from. A pack carries disks only, as a flattened tar of the
+  container's layers for an image-based machine — so a scrubbed file is
+  absent from the artifact rather than merely unlinked from a block image.
+- **Why hostd owns the stop.** `pack create --from-vm` refuses a running
+  machine and smolvm has no one call that stops and packs, so the daemon does
+  both under a per-rig lock, as smolvm's own export handler holds its
+  lifecycle lock across the stopped-check and the pack.
+- **Why it is a subprocess.** The HTTP API's only export pushes to an OCI
+  registry; a local artifact comes from the CLI. It runs the binary the
+  daemon's own smolvm runs (`ManagedSmolvm.binary`), so both read the same
+  on-disk machine state, and never with the API key or the secret key. A
+  daemon that did not start smolvm (plain `serve`) serves no snapshot routes
+  and does not name the feature in `/health`.
+- **A capture answers before it finishes.** A pack is gigabytes and minutes,
+  far past any HTTP deadline, so `POST .../snapshots` reserves the name and
+  answers `202`; the snapshot carries `capturing` until the artifact lands,
+  then `active` or `failed` with a reason. The control plane polls it.
+- **Only scrub-and-delete.** Stopping the rig rules out the non-destructive
+  "snapshot everything and keep it running" mode, so the provider declares
+  `fullSnapshotCapture: false` and Amika offers only "snapshot and delete".
+- **The scrub window.** The control plane scrubs the rig's credentials over
+  `exec` (so the rig is still running), then this stops it. The agent is
+  alive for both, and a graceful stop flushes the guest, so a file the scrub
+  removed can be written back before the pack reads the disks. Every provider
+  Amika supports has this window — none kills the agent before capturing —
+  but it is wider here, because stopping a VM runs the guest's shutdown
+  rather than freezing it.
+- **Names are never paths.** Amika's snapshot names are namespaced
+  (`org_abc123/sandbox/nightly`), so they carry slashes. Each artifact's
+  filename is a slug plus a digest of the whole name, so no part of a name
+  reaches the filesystem and two names that slugify alike keep their own
+  files. The routes take the name as a trailing wildcard, decoded once.
+- **Resolving one at create.** `resolveImage`'s successor `resolveSource`
+  (`src/internal/requests.ts`) checks `[preset_images]`, then this store,
+  then the full-OCI-reference passthrough. The store has to come first,
+  because a snapshot name contains slashes and would otherwise be forwarded
+  to a registry.
+- **A snapshot outlives the rigs made from it.** Packing a rig that booted
+  from an artifact reads that artifact's layers again, so a delete is refused
+  (`409`) while any rig created from it is still on the host. `snapshots.json`
+  records which rig came from which snapshot.
+- **What an interrupted run leaves.** A capture cannot outlive the daemon
+  that spawned it, so on startup the store turns every `capturing` entry into
+  `failed`, drops entries whose artifact has gone missing, and clears
+  staging.
+
 ## API versions
 
 hostd and the control plane upgrade independently, so hostd's API is
@@ -764,7 +836,8 @@ get, delete, start, stop, exec, files, services), the service routes and
 the service-link routes.
 `GET /health` lists the versions served and the features a control plane may
 rely on (`{ "status": "ok", "apis": ["v0beta1"], "features":
-["service-tokens"] }`). `/api/v1/machines` serves the same machine routes, without
+["service-tokens", "snapshots"] }`). `snapshots` appears only on a daemon
+that can take them (see [Snapshots](#snapshots)). `/api/v1/machines` serves the same machine routes, without
 service routes, for control planes on providers from before `v0beta1`; remove
 it once none are deployed. Change a version's contract only in a new version.
 

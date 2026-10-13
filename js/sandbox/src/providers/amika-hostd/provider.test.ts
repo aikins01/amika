@@ -3,8 +3,18 @@
  * runtime: this provider, then hostd's app, then the `smol` provider hostd
  * runs machines through, then a fake `smolvm serve`.
  */
+import { EventEmitter } from "node:events";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createApp } from "../../../../amika-hostd/src/app";
+// The real store and capture, so this contract test covers hostd's snapshot
+// behaviour rather than a stand-in for it.
+// eslint-disable-next-line local/no-cross-package-internal -- see above
+import { openSnapshotStore } from "../../../../amika-hostd/src/internal/snapshot-store";
+// eslint-disable-next-line local/no-cross-package-internal -- see above
+import { startCapture } from "../../../../amika-hostd/src/internal/snapshots";
 // hostd's app exports no runtime, so this contract test reaches for the one
 // its daemon builds.
 // eslint-disable-next-line local/no-cross-package-internal -- see above
@@ -166,26 +176,96 @@ function fakeSmolvm(
   };
 }
 
+/** Temporary snapshot directories, removed after each test. */
+const snapshotRoots: string[] = [];
+
+/**
+ * A `smolvm pack create` that writes the artifact a real one would. The pack
+ * is a subprocess in hostd, so a contract test has to stand in for it; every
+ * other hop here is the real code.
+ */
+function fakePack({ code = 0, manual = false } = {}) {
+  const packed: string[] = [];
+  const finish: (() => void)[] = [];
+  const spawn = ((_command: string, args: readonly string[]) => {
+    const child = new EventEmitter() as never as ReturnType<
+      typeof import("node:child_process").spawn
+    >;
+    Object.assign(child, { stdout: null, stderr: null, kill: vi.fn() });
+    const done = () => {
+      const stub = args[args.indexOf("-o") + 1];
+      if (code === 0) {
+        writeFileSync(`${stub}.smolmachine`, "packed");
+        packed.push(args[args.indexOf("--from-vm") + 1]);
+      }
+      (child as unknown as EventEmitter).emit("close", code, null);
+    };
+    if (manual) finish.push(done);
+    else queueMicrotask(done);
+    return child;
+  }) as never;
+  // A real pack takes minutes; `manual` holds it so a test can look at the
+  // host while it is still running.
+  return { spawn, packed, release: () => finish.splice(0).forEach((f) => f()) };
+}
+
 function harness({
   config = { secretKey: SECRET },
   machines = [],
   respond,
   amikaUrl,
+  snapshots = false,
+  pack = fakePack(),
 }: {
   config?: AmikaHostdConfig;
   machines?: SmolMachine[];
   respond?: (request: Received) => Response | undefined;
   /** hostd's Amika URL, which makes it serve previews. */
   amikaUrl?: string;
+  /** Serve the snapshot routes, as a daemon running its own smolvm does. */
+  snapshots?: boolean;
+  pack?: ReturnType<typeof fakePack>;
 } = {}) {
   const fake = fakeSmolvm(machines, respond);
   // What hostd's service routes reach a machine's published ports with.
   const guest = vi.fn<typeof fetch>(async () => Response.json({ ok: true }));
-  const app = createApp(
-    { secretKey: SECRET, amikaUrl },
-    providerRuntime({ apiUrl: SMOL_API_URL, fetch: fake.smolvm }),
-    { fetch: guest },
-  );
+  const runtime = providerRuntime({
+    apiUrl: SMOL_API_URL,
+    fetch: fake.smolvm,
+  });
+  let store: ReturnType<typeof openSnapshotStore> | undefined;
+  let captures: Promise<void>[] = [];
+  if (snapshots) {
+    const root = mkdtempSync(path.join(tmpdir(), "amika-hostd-contract-"));
+    snapshotRoots.push(root);
+    store = openSnapshotStore({
+      directory: path.join(root, "snapshots"),
+      indexFile: path.join(root, "snapshots.json"),
+    });
+  }
+  const app = createApp({ secretKey: SECRET, amikaUrl }, runtime, {
+    fetch: guest,
+    ...(store
+      ? {
+          snapshots: {
+            store,
+            capture: async (rig: string, name: string) => {
+              const { done } = await startCapture(
+                { rig, name },
+                {
+                  runtime,
+                  store: store!,
+                  smolvm: "/usr/local/bin/smolvm",
+                  env: {},
+                  spawn: pack.spawn,
+                },
+              );
+              captures.push(done);
+            },
+          },
+        }
+      : {}),
+  });
   const fetcher = vi.fn<typeof fetch>(async (url, init) =>
     app.request(new Request(url, init)),
   );
@@ -195,6 +275,13 @@ function harness({
     guest,
     fetcher,
     config,
+    store,
+    pack,
+    /** Wait for every capture this harness started. */
+    settle: async () => {
+      await Promise.all(captures);
+      captures = [];
+    },
     provider: amikaHostdProvider({ config, fetcher }),
   };
 }
@@ -212,6 +299,12 @@ function published(machine: SmolMachine | undefined, guest: number) {
   expect(host).toBeGreaterThan(0);
   return host!;
 }
+
+afterEach(() => {
+  for (const root of snapshotRoots.splice(0)) {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
 
 describe("amika-hostd provider", () => {
   it("creates and starts through hostd with the correct provider identity", async () => {
@@ -474,14 +567,18 @@ describe("amika-hostd provider", () => {
       listSandboxes: true,
       ssh: false,
       services: true,
-      snapshots: false,
+      snapshots: true,
+      // A pack needs the rig stopped, so there is no keep-running capture.
+      fullSnapshotCapture: false,
+      scrubCapture: true,
+      snapshotIdsAreOpaque: false,
       streaming: false,
       supportsAutoDelete: false,
     });
     const sandbox = provider.sandboxes.get("demo");
     expect(sandbox.ssh).toBeNull();
     expect(sandbox.services).not.toBeNull();
-    expect(sandbox.snapshots).toBeNull();
+    expect(sandbox.snapshots).not.toBeNull();
     await expect(
       sandbox.streamExec("true", { onStdout: () => {} }),
     ).rejects.toMatchObject({
@@ -840,5 +937,150 @@ describe("amika-hostd services", () => {
       provider: "amika-hostd",
     });
     expect(smolvm).not.toHaveBeenCalled();
+  });
+});
+
+describe("snapshots", () => {
+  const NAME = "org_abc123/sandbox/nightly";
+  /**
+   * A minimal scrub: the control plane computes the real paths, and this
+   * only has to prove they travel through hostd's exec before the capture.
+   */
+  const TARGETS = {
+    files: ["/home/amika/.claude.json"],
+    sudoFiles: [],
+    sudoFileRestores: [],
+    envVarNames: ["ANTHROPIC_API_KEY"],
+  };
+
+  /** Scrub and capture, the one mode hostd offers, and wait for the pack. */
+  async function captured(h: ReturnType<typeof harness>) {
+    const result = await h.provider.sandboxes
+      .get("demo")
+      .snapshots!.scrubAndCreate(NAME, TARGETS);
+    await h.settle();
+    return result;
+  }
+
+  it("scrubs, stops the rig, packs it, and reports it by name", async () => {
+    const h = harness({
+      machines: [{ ...MACHINE, state: "running" }],
+      snapshots: true,
+    });
+
+    const { snapshot, removedFiles, removedEnvVars } = await captured(h);
+    expect(removedFiles).toEqual(TARGETS.files);
+    expect(removedEnvVars).toEqual(TARGETS.envVarNames);
+    // Named, never id-addressed: hostd boots a snapshot by the name the
+    // control plane gave it.
+    expect(snapshot.providerSnapshotId).toBeNull();
+    expect(h.pack.packed).toEqual(["demo"]);
+    expect(await h.provider.snapshots!.get(NAME)).toMatchObject({
+      name: NAME,
+      state: "active",
+    });
+  });
+
+  it("scrubs the rig before stopping it, which needs it running", async () => {
+    const h = harness({
+      machines: [{ ...MACHINE, state: "running" }],
+      snapshots: true,
+    });
+    await captured(h);
+
+    // The scrub runs over exec, so it has to happen while the rig is up;
+    // smolvm then refuses to pack a running machine, so the stop follows.
+    const writes = calls(h.received, { writes: true });
+    expect(writes.indexOf("POST /demo/exec")).toBeLessThan(
+      writes.indexOf("POST /demo/stop"),
+    );
+    expect(h.machines.get("demo")?.state).toBe("stopped");
+  });
+
+  it("holds the name while the pack runs, then settles active", async () => {
+    const pack = fakePack({ manual: true });
+    const h = harness({ machines: [MACHINE], snapshots: true, pack });
+    const { snapshot } = await h.provider.sandboxes
+      .get("demo")
+      .snapshots!.scrubAndCreate(NAME, TARGETS);
+
+    // The capture route answers while the pack runs, so the snapshot
+    // carries the progress the control plane polls for.
+    expect(await h.provider.snapshots!.get(NAME)).toMatchObject({
+      state: "capturing",
+    });
+    pack.release();
+    await h.settle();
+    expect(await snapshot.waitForActive()).toMatchObject({ state: "active" });
+  });
+
+  it("reports why a pack failed rather than hanging on it", async () => {
+    const h = harness({
+      machines: [MACHINE],
+      snapshots: true,
+      pack: fakePack({ code: 1 }),
+    });
+    const { snapshot } = await captured(h);
+    expect(await h.provider.snapshots!.get(NAME)).toMatchObject({
+      state: "failed",
+    });
+    await expect(snapshot.waitForActive()).rejects.toThrow(
+      /failed on its host/,
+    );
+  });
+
+  it("refuses the keep-running capture it cannot do", async () => {
+    const h = harness({ machines: [MACHINE], snapshots: true });
+    // A pack needs the rig stopped, so `fullSnapshotCapture` is false and
+    // this is the guard for a caller that ignores the flag.
+    await expect(
+      h.provider.sandboxes.get("demo").snapshots!.create(NAME),
+    ).rejects.toMatchObject({ name: "SandboxProviderUnsupportedError" });
+    expect(h.pack.packed).toEqual([]);
+  });
+
+  it("has nothing in a rig's environment to scrub", async () => {
+    const h = harness({ machines: [MACHINE], snapshots: true });
+    // Amika delivers injected secrets at initialize time, into files, so a
+    // host rig's create environment never holds one.
+    await expect(
+      h.provider.sandboxes.get("demo").snapshots!.isEnvScrubbable(),
+    ).resolves.toBe(true);
+  });
+
+  it("reports a missing snapshot as absent, not as an error", async () => {
+    const h = harness({ snapshots: true });
+    expect(await h.provider.snapshots!.get(NAME)).toBeNull();
+  });
+
+  it("deletes a snapshot it took, and a missing one is done", async () => {
+    const h = harness({ machines: [MACHINE], snapshots: true });
+    await captured(h);
+
+    const snapshot = await h.provider.snapshots!.get(NAME);
+    await snapshot!.delete();
+    expect(await h.provider.snapshots!.get(NAME)).toBeNull();
+    expect(h.store!.get(NAME)).toBeUndefined();
+    // Deleting what is not there is done, as it is for every provider.
+    await expect(snapshot!.delete()).resolves.toBeUndefined();
+  });
+
+  it("creates a rig from a snapshot by sending its name as the image", async () => {
+    const h = harness({ machines: [MACHINE], snapshots: true });
+    await captured(h);
+    h.received.length = 0;
+
+    await h.provider.sandboxes.create(ctx, {
+      ...INPUT,
+      name: "child",
+      snapshot: NAME,
+    });
+    // hostd resolved the name against its own store, so smolvm booted the
+    // artifact rather than being asked to pull a registry reference whose
+    // path merely happens to contain slashes.
+    const create = h.received.find((r) => r.method === "POST" && r.path === "");
+    const body = create?.body as { image?: string; from?: string };
+    expect(body.image).toBeUndefined();
+    expect(body.from).toMatch(/\.smolmachine$/);
   });
 });

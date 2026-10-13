@@ -47,6 +47,13 @@ export interface SmolOperationsOptions {
  */
 export type SmolCreateInput = Omit<CreateSandboxProviderInput, "resources"> & {
   resources?: Partial<SandboxResources>;
+  /**
+   * A `.smolmachine` or checkpoint artifact on the runtime's own host to
+   * boot from, instead of pulling `snapshot` as an OCI image. smolvm takes
+   * the two as mutually exclusive, so `snapshot` is ignored when this is
+   * set. Only amika-hostd uses it, to boot a rig from a local snapshot.
+   */
+  from?: string;
 };
 
 /**
@@ -164,7 +171,7 @@ export function smolOperations(
     write,
     create: async (input: SmolCreateInput): Promise<CreatedProviderSandbox> => {
       machinePath(input.name);
-      if (!input.snapshot.trim())
+      if (!input.from && !input.snapshot.trim())
         throw new Error("Smol requires an OCI image in snapshot");
       if (input.services.some((service) => service.protocol !== "tcp"))
         throw new SandboxProviderUnsupportedError(provider, "udp services");
@@ -201,7 +208,9 @@ export function smolOperations(
       // conflict never causes us to delete an existing machine.
       await client.discard("", "POST", {
         name: input.name,
-        image: input.snapshot,
+        // smolvm refuses both together, so an artifact create sends no image.
+        image: input.from ? undefined : input.snapshot,
+        from: input.from,
         cpus: resources?.vcpus,
         memoryMb:
           resources?.memoryGib === undefined

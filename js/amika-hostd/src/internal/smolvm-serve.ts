@@ -38,6 +38,12 @@ export const DEFAULT_SMOL_API_URL = "http://127.0.0.1:23020";
 
 export interface ManagedSmolvm {
   pid: number;
+  /**
+   * The binary this smolvm runs, so anything else the daemon runs through
+   * smolvm (packing a snapshot) uses the same one, and so the same on-disk
+   * machine state.
+   */
+  binary: string;
   /** Where smolvm serves, which the daemon must forward to. */
   apiUrl: string;
   /** Resolves, with why, once smolvm has exited for any reason. */
@@ -212,6 +218,7 @@ export async function startSmolvm(
     }
     return {
       pid: pid as number,
+      binary,
       apiUrl: address.origin,
       exited,
       get running() {

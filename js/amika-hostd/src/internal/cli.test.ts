@@ -89,6 +89,7 @@ function harness(env: NodeJS.ProcessEnv = ENV) {
   let smolvmRunning = true;
   const smolvm: ManagedSmolvm = {
     pid: 88,
+    binary: "/usr/local/bin/smolvm",
     apiUrl: "http://127.0.0.1:23020",
     exited: new Promise((resolve) => (smolvmExit = resolve)),
     get running() {
@@ -210,6 +211,8 @@ describe("runCli", () => {
         smolvmLogFile: "/state/amika-hostd/log/smolvm.log",
         servicesFile: "/state/amika-hostd/services.json",
         prepullFile: "/state/amika-hostd/prepull.json",
+        snapshotIndexFile: "/state/amika-hostd/snapshots.json",
+        snapshotDir: "/state/amika-hostd/snapshots",
       },
       { isRunning: deps.isRunning, env: expect.any(Object), secretKey: SECRET },
     );
@@ -234,6 +237,20 @@ describe("runCli", () => {
         {
           servicesFile: "/state/amika-hostd/services.json",
           hiddenMachines: expect.any(Function),
+          // Snapshots are served only by a daemon running its own smolvm:
+          // a pack is a subprocess of that binary. Plain `serve` forwards to
+          // a smolvm it did not start, so it offers none.
+          snapshots:
+            args[0] === "up"
+              ? {
+                  directory: "/state/amika-hostd/snapshots",
+                  indexFile: "/state/amika-hostd/snapshots.json",
+                  smolvm: "/usr/local/bin/smolvm",
+                  env: expect.any(Object),
+                  err: expect.any(Function),
+                  signal: expect.any(AbortSignal),
+                }
+              : undefined,
         },
       );
       expect(deps.claimPidFile).toHaveBeenCalledWith(

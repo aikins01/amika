@@ -37,6 +37,14 @@ export interface DaemonPaths {
   servicesFile: string;
   /** The preset images already pulled into smolvm's cache (`prepull.ts`). */
   prepullFile: string;
+  /** The snapshots this host holds (`snapshot-store.ts`). */
+  snapshotIndexFile: string;
+  /**
+   * Where snapshot artifacts land unless `snapshot_dir` names somewhere
+   * else. Under the state directory, so a host that never configures one
+   * still keeps snapshots with the daemon's other state.
+   */
+  snapshotDir: string;
 }
 
 export type Spawn = (
@@ -318,6 +326,8 @@ export function daemonPaths(env: NodeJS.ProcessEnv = {}): DaemonPaths {
     smolvmLogFile: path.join(logDir, "smolvm.log"),
     servicesFile: path.join(dir, "services.json"),
     prepullFile: path.join(dir, "prepull.json"),
+    snapshotIndexFile: path.join(dir, "snapshots.json"),
+    snapshotDir: path.join(dir, "snapshots"),
   };
 }
 

@@ -880,7 +880,12 @@ async function serveInForeground(
       const serving = runtime
         ? { ...config, smolApiUrl: runtime.apiUrl }
         : config;
-      server = await listen(serving, paths, usedPrepullNames, deps);
+      // Only a daemon running its own smolvm can pack a snapshot: a pack
+      // is a subprocess of that binary, reading the same machine state.
+      server = await listen(serving, paths, usedPrepullNames, deps, {
+        smolvm: runtime?.binary,
+        signal: interrupted.signal,
+      });
     }
     // Signalled during startup: stop without telling `up` it is ready.
     if (server === undefined || interrupted.signal.aborted) {
@@ -1027,6 +1032,8 @@ async function listen(
   paths: DaemonPaths,
   usedPrepullNames: ReadonlySet<string>,
   deps: CliDeps,
+  /** The smolvm a pack runs through, when this daemon started one. */
+  packing: { smolvm?: string; signal?: AbortSignal } = {},
 ): Promise<RunningServer> {
   // Machines run through the `smol` provider, on the smolvm this daemon
   // started (or `SMOL_API_URL`, for plain `serve`).
@@ -1037,6 +1044,20 @@ async function listen(
   try {
     return await (deps.startServer ?? startServerOnPort)(config, runtime, {
       servicesFile: paths.servicesFile,
+      snapshots: packing.smolvm
+        ? {
+            directory: config.snapshotDir ?? paths.snapshotDir,
+            indexFile: paths.snapshotIndexFile,
+            smolvm: packing.smolvm,
+            // As smolvm itself is started: never with the daemon's keys.
+            env: withoutEnv(deps.env, [
+              ...ENV_NAMES.apiKey,
+              ...ENV_NAMES.secretKey,
+            ]),
+            err: deps.err,
+            signal: packing.signal,
+          }
+        : undefined,
       // This run's throwaway machines, deleted or not, so a list caught
       // mid-create or mid-delete still hides them, and any an earlier run
       // left behind.

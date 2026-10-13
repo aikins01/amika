@@ -54,22 +54,69 @@ export const replaceServicesSchema = z.strictObject({
 });
 
 /**
- * The image smolvm should boot for a create request's `image`. A name
- * configured under `[preset_images]` becomes its configured reference. Anything else
- * that looks like a full OCI reference (it has a registry path or a tag) is
- * forwarded unchanged, which keeps ad hoc images working for development. A
- * bare name that isn't configured is refused, so a host never silently pulls
- * `docker.io/library/<name>` in place of an Amika preset.
+ * Taking a snapshot of a rig. The name is Amika's, org-scoped and so
+ * slash-separated; the store derives every filename from it rather than
+ * using it as one.
  */
-export function resolveImage(
+export const createSnapshotSchema = z.strictObject({
+  name: z.string().trim().min(1).max(200),
+});
+
+/** Where a machine's filesystem comes from: an image, or a local snapshot. */
+export type MachineSource =
+  | { image: string; from?: undefined; snapshot?: undefined }
+  | { image?: undefined; from: string; snapshot: string };
+
+/** What `resolveSource` needs of the snapshot store, and nothing more. */
+export interface SnapshotSource {
+  get(name: string): { state: string } | undefined;
+  artifact(name: string): string | undefined;
+}
+
+/**
+ * What smolvm should boot for a create request's `image`, in this order:
+ *
+ * 1. A name configured under `[preset_images]` becomes its reference.
+ * 2. A snapshot this host holds becomes its `.smolmachine` artifact. This is
+ *    checked BEFORE the OCI passthrough below because Amika's snapshot names
+ *    are namespaced (`org_abc123/sandbox/nightly`) and so contain slashes:
+ *    left to the passthrough, every snapshot would be sent to a registry.
+ * 3. Anything else that looks like a full OCI reference (a registry path or a
+ *    tag) is forwarded unchanged, which keeps ad hoc images working for
+ *    development.
+ *
+ * A bare name that is none of these is refused, so a host never silently
+ * pulls `docker.io/library/<name>` in place of an Amika preset.
+ */
+export function resolveSource(
   image: string,
   images: Record<string, string>,
+  snapshots: SnapshotSource,
   configPath: string | undefined,
-): string {
-  if (Object.hasOwn(images, image)) return images[image];
-  if (image.includes("/") || image.includes(":")) return image;
-  const message = `image ${JSON.stringify(image)} is not configured on this host; add it under [preset_images] in ${configPath ?? "the amika-hostd config.toml"}`;
-  throw new HTTPException(400, {
+): MachineSource {
+  if (Object.hasOwn(images, image)) return { image: images[image] };
+  const snapshot = snapshots.get(image);
+  if (snapshot) {
+    const from = snapshots.artifact(image);
+    // Known, but not bootable: say so rather than let a `capturing` name
+    // fall through to a registry pull that fails for an unrelated reason.
+    if (!from) {
+      throw badRequest(
+        snapshot.state === "capturing"
+          ? `snapshot ${JSON.stringify(image)} is still being taken on this host`
+          : `snapshot ${JSON.stringify(image)} is not usable on this host (${snapshot.state})`,
+      );
+    }
+    return { from, snapshot: image };
+  }
+  if (image.includes("/") || image.includes(":")) return { image };
+  throw badRequest(
+    `image ${JSON.stringify(image)} is not configured on this host; add it under [preset_images] in ${configPath ?? "the amika-hostd config.toml"}`,
+  );
+}
+
+function badRequest(message: string): HTTPException {
+  return new HTTPException(400, {
     res: Response.json({ error: message }, { status: 400 }),
   });
 }
