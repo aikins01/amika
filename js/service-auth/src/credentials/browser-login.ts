@@ -133,22 +133,30 @@ export async function verifySession(
 /**
  * The path of a preview, ending in `/` so the service's relative URLs
  * resolve under it. The rig name is a hostd machine name (URL-safe); the
- * service name is percent-encoded as one segment.
+ * service name is percent-encoded as one segment, and may not be `.` or `..`,
+ * which no encoding keeps from resolving as a step up the path.
  */
 export function previewPath(
   rigsPath: string,
   rig: string,
   service: string,
 ): string {
+  if (service === "." || service === "..") {
+    throw new Error(`Invalid service name: ${service}`);
+  }
   return `${rigsPath}/${rig}/${PREVIEWS_SEGMENT}/${encodeURIComponent(service)}/`;
 }
 
 /**
- * Whether a host registered at `url` can log browsers in: a bare origin
- * (https, the default port, no path, query or fragment) whose hostname is not
- * this machine's own (`localhost`, loopback and unspecified addresses,
- * including IPv4-mapped ones). The URL parser has already turned odd IPv4
- * spellings into dotted ones.
+ * Whether a host registered at `url` can log browsers in: an https origin on
+ * the default port, spelled exactly as `URL.origin` spells it (an optional
+ * trailing `/` aside), whose hostname is not this machine's own (`localhost`,
+ * loopback and unspecified addresses, including IPv4-mapped ones).
+ *
+ * The exact spelling matters because credentials name the origin as a string
+ * and the browser's origin is always canonical: a host registered as
+ * `https://Preview.example:443?` would pass every other check here and still
+ * never log anyone in.
  */
 export function isBrowserLoginOrigin(url: string): boolean {
   let parsed: URL;
@@ -160,15 +168,12 @@ export function isBrowserLoginOrigin(url: string): boolean {
   if (
     parsed.protocol !== "https:" ||
     parsed.port !== "" ||
-    parsed.pathname !== "/" ||
-    parsed.search ||
-    parsed.hash ||
-    parsed.username ||
-    parsed.password
+    (url !== parsed.origin && url !== `${parsed.origin}/`)
   ) {
     return false;
   }
-  const host = parsed.hostname.replace(/\.$/, "").toLowerCase();
+  // A name with trailing dots is the same name to a resolver.
+  const host = parsed.hostname.replace(/\.+$/, "");
   if (host === "localhost" || host.endsWith(".localhost")) return false;
   if (/^\d+\.\d+\.\d+\.\d+$/.test(host)) {
     return !host.startsWith("127.") && host !== "0.0.0.0";

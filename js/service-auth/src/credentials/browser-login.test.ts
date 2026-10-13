@@ -74,9 +74,14 @@ describe("login passes", () => {
   });
 
   it("refuses a pass that claims to outlive any pass", async () => {
-    // As only a buggy or forged issuer could mint one.
-    const token = await signLoginPass(SECRET, PASS, NOW + 3600);
-    expect(await verify(token)).toBe("invalid");
+    // As only a buggy or forged issuer could mint one: a clock more than five
+    // minutes ahead looks the same.
+    expect(await verify(await signLoginPass(SECRET, PASS, NOW + 301))).toBe(
+      "invalid",
+    );
+    expect(await verify(await signLoginPass(SECRET, PASS, NOW + 3600))).toBe(
+      "invalid",
+    );
   });
 
   it("refuses an edited payload", async () => {
@@ -154,6 +159,16 @@ describe("sessions", () => {
     );
   });
 
+  it("refuses a session that claims to outlive any session", async () => {
+    expect(await verify(await signSession(SECRET, PASS, NOW + 300))).toEqual({
+      user: "user_1",
+      expiresAt: NOW + 300 + SESSION_TTL_S,
+    });
+    expect(await verify(await signSession(SECRET, PASS, NOW + 301))).toBe(
+      "invalid",
+    );
+  });
+
   // A session never signs a state: one that has one is no session.
   it("treats a signed session with a state as malformed", async () => {
     const token = signRaw("amika-hostd sessions v1", {
@@ -177,6 +192,12 @@ describe("previewPath", () => {
       "/v0beta1/rigs/demo/previews/Coding%20Agent%2Fv2/",
     );
   });
+
+  it.each([".", ".."])("refuses %j, which would step up the path", (name) => {
+    expect(() => previewPath("/v0beta1/rigs", "demo", name)).toThrow(
+      "Invalid service name",
+    );
+  });
 });
 
 describe("isBrowserLoginOrigin", () => {
@@ -196,12 +217,22 @@ describe("isBrowserLoginOrigin", () => {
     ["a path", "https://example.com/hostd/"],
     ["a query", "https://preview.example?tenant=x"],
     ["a fragment", "https://preview.example/#x"],
+    ["an empty query", "https://preview.example?"],
+    ["an empty fragment", "https://preview.example#"],
+    ["empty userinfo", "https://:@preview.example"],
+    ["a spelled-out default port", "https://preview.example:443"],
+    ["uppercase", "https://PREVIEW.example"],
+    ["a dot segment", "https://preview.example/."],
     ["localhost", "https://localhost"],
     ["a localhost subdomain", "https://a.localhost"],
+    ["localhost with trailing dots", "https://localhost.."],
+    ["a loopback address with trailing dots", "https://127.0.0.1.."],
     ["a loopback address", "https://127.0.0.1"],
     ["an odd loopback spelling", "https://0x7f.1"],
     ["the unspecified address", "https://0.0.0.0"],
     ["IPv6 loopback", "https://[::1]"],
+    ["the IPv6 unspecified address", "https://[::]"],
+    ["the IPv4-mapped unspecified address", "https://[::ffff:0:0]"],
     ["IPv4-mapped loopback", "https://[::ffff:127.0.0.1]"],
     ["not a URL", "preview.example"],
   ])("refuses %s", (_label, url) => {
