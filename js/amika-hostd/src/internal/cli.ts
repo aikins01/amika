@@ -69,7 +69,7 @@ import {
   startSmolvm as startSmolvmServe,
   type ManagedSmolvm,
 } from "./smolvm-serve.js";
-import { isLoopbackHost } from "./link-cookie.js";
+import { isLoopbackHost } from "@amika/service-auth/gateway";
 
 export const USAGE = `Usage: amika-hostd <command> [options]
 
@@ -775,7 +775,7 @@ async function saveUrl(
 /**
  * Why a browser cannot follow a preview's root-relative URLs (`/_next/...`,
  * `/@vite/client`) at public URL `url`, or undefined when it can. The link
- * cookie routes them (`./link-cookie.ts`), which needs every root path of the
+ * cookie routes them (`@amika/service-auth/gateway`), which needs every root path of the
  * origin to reach hostd, and a cookie a browser keeps: it drops a `Secure`
  * one over plain http, and hostd sets none on a loopback address or an
  * explicit port, since a host's cookies are shared across its ports. Links themselves work either way, so

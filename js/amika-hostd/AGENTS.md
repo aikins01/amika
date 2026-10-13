@@ -600,7 +600,7 @@ Browsers, which cannot send a header on a navigation and must never hold the
 host key, use a signed service link instead:
 `/v0beta1/rigs/<machine>/service-links/<name>/<expiry>.<signature>/<path>`.
 The `amika-hostd` provider mints it on the control plane and hostd verifies
-it locally, both with `@amika/sandbox/hostd-service-links`: the signature is
+it locally, both with `@amika/service-auth/credentials`: the signature is
 an HMAC-SHA256 over the machine, service and expiry, under a key derived from
 the host's secret key. A link lasts a day, and the control plane mints a new
 one every twelve hours, so the oldest link it hands out still has twelve
@@ -625,7 +625,7 @@ Most dev servers (Vite, Next.js) write root-relative URLs into their pages
 (`/@vite/client`, `/_next/static/...`, `/api/...`), which leave the link and
 carry no credential. So opening a link in a browser (`Sec-Fetch-Mode:
 navigate`) also sets the link cookie, `__Host-amika-service-link`, naming the
-link's machine, service and token (`src/internal/link-cookie.ts`). A request
+link's machine, service and token (`@amika/service-auth/gateway`). A request
 outside hostd's own paths (`/v0beta1/...`, `/api/v1/machines...`, `/health`)
 that carries it is verified as the link would be and forwarded to that
 service with its whole path as the guest path, HTTP and WebSocket upgrades
@@ -672,7 +672,7 @@ service with its whole path as the guest path, HTTP and WebSocket upgrades
   the key.
 - A caller without the key, such as `curl` or a script, may send a service
   token instead: `X-Amika-Authorization: Bearer <token>`. The control plane
-  mints it (`signServiceToken` in `@amika/sandbox/hostd-service-links`) for
+  mints it (`signServiceToken` in `@amika/service-auth/credentials`) for
   one machine's one service, for at most a day: the same claim a link signs,
   under a second key derived from the secret key, so a link's token never
   works as a service token or the other way round. hostd refuses a token

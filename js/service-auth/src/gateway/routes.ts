@@ -1,0 +1,117 @@
+/** The service routes a gateway serves, and the request shape it reads. */
+
+/**
+ * What the gateway reads of a request, whatever server received it: a
+ * Fetch `Request`, or a Node upgrade (`fromIncomingMessage`).
+ */
+export interface GatewayRequest {
+  method: string;
+  /** The request's URL; only its path and query are trusted. */
+  url: URL;
+  headers: Headers;
+}
+
+/** A Fetch `Request` as the gateway reads it. */
+export function fromRequest(request: Request): GatewayRequest {
+  return {
+    method: request.method,
+    url: new URL(request.url),
+    headers: request.headers,
+  };
+}
+
+/** amikad's service name, as Amika registers it. */
+export const AMIKAD_SERVICE = "amikad";
+
+/** A parsed service route. */
+export interface ServiceRoute {
+  machine: string;
+  service: string;
+  /** The guest-side path, always starting with `/`. */
+  path: string;
+}
+
+/**
+ * Split a request path into its route parts, or null if it is not a service
+ * route. The service name is one percent-encoded path segment, decoded here;
+ * the rest of the path is kept encoded, exactly as the caller sent it.
+ */
+export function parseServicePath(pathname: string): ServiceRoute | null {
+  const match =
+    /^\/v0beta1\/rigs\/([a-zA-Z0-9][a-zA-Z0-9_-]*)\/services\/([^/]+)(\/.*)?$/.exec(
+      pathname,
+    );
+  if (!match) return null;
+  let service: string;
+  try {
+    service = decodeURIComponent(match[2]);
+  } catch {
+    return null;
+  }
+  return { machine: match[1], service, path: match[3] ?? "/" };
+}
+
+/** A parsed service-link route: a service route plus its signed token. */
+export interface ServiceLinkRoute extends ServiceRoute {
+  /** `<expiry>.<signature>`, as the control plane minted it. */
+  token: string;
+}
+
+/**
+ * Split a service-link path into its route parts and token, or null if it is
+ * not one. As in `parseServicePath`, the service name is decoded and the
+ * guest path is kept encoded.
+ */
+export function parseServiceLinkPath(
+  pathname: string,
+): ServiceLinkRoute | null {
+  const match =
+    /^\/v0beta1\/rigs\/([a-zA-Z0-9][a-zA-Z0-9_-]*)\/service-links\/([^/]+)\/([^/]+)(\/.*)?$/.exec(
+      pathname,
+    );
+  if (!match) return null;
+  let service: string;
+  try {
+    service = decodeURIComponent(match[2]);
+  } catch {
+    return null;
+  }
+  return {
+    machine: match[1],
+    service,
+    token: match[3],
+    path: match[4] ?? "/",
+  };
+}
+
+/**
+ * Whether this upgrade is the one service request that needs no host key:
+ * the SSH WebSocket a user's `amika sandbox ssh` opens to the rig's amikad,
+ * exactly `GET /v0beta1/rigs/<rig>/services/amikad/v1/ssh-sessions`, no query,
+ * as a WebSocket upgrade. The control plane hands the CLI that URL and the
+ * rig's connect token, never the host key; amikad verifies the token before
+ * it accepts the WebSocket, and sshd then checks the user's SSH key. Every
+ * other path, method, service and plain HTTP request still needs the key.
+ */
+export function isAmikadSshUpgrade({
+  method,
+  url,
+  headers,
+}: GatewayRequest): boolean {
+  const route = parseServicePath(url.pathname);
+  if (
+    method !== "GET" ||
+    url.search !== "" ||
+    route === null ||
+    // The literal path, not just its decoding, so no encoded variant counts.
+    url.pathname !==
+      `/v0beta1/rigs/${route.machine}/services/${AMIKAD_SERVICE}/v1/ssh-sessions`
+  ) {
+    return false;
+  }
+  const upgrade = headers.get("upgrade")?.trim().toLowerCase();
+  const connection = (headers.get("connection") ?? "")
+    .split(",")
+    .map((token) => token.trim().toLowerCase());
+  return upgrade === "websocket" && connection.includes("upgrade");
+}

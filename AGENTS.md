@@ -45,8 +45,9 @@ The repo also ships `amikalog`, a separate, separately-installed CLI that captur
 
 This repository is an OSS monorepo. Go sources live under `go/`. Other
 language SDKs live under `sdk/` (e.g. `sdk/typescript/`). TypeScript packages
-that are consumed as source rather than published live under `js/` — currently
-`js/sandbox` (`@amika/sandbox`), the sandbox provider abstraction. See
+that are consumed as source rather than published live under `js/`: among them
+`js/sandbox` (`@amika/sandbox`), the sandbox provider abstraction, and
+`js/service-auth` (`@amika/service-auth`), who may reach a rig's service. See
 [`js/AGENTS.md`](./js/AGENTS.md) for the conventions every `js/` package
 follows.
 
@@ -57,8 +58,9 @@ lockfile, and `packageManager` pin, because it is a published npm package with
 its own release pipeline. Run `pnpm install` at the root for the former and
 from `sdk/typescript/` for the latter.
 
-`js/sandbox` is consumed by `amika-mono` as a git submodule pinned to an exact
-commit, so this repo is the single source of truth for that package: changes
+`js/sandbox`, and `js/service-auth` which it depends on, are consumed by
+`amika-mono` as a git submodule pinned to an exact commit, so this repo is the
+single source of truth for those packages: changes
 land here and reach amika-mono through a pointer bump. That also means this
 repo's CI and pre-commit hook own the package's source quality — amika-mono
 sees only a gitlink for the submodule and so cannot lint or format it.

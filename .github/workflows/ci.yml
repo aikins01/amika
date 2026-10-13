@@ -68,6 +68,37 @@ jobs:
       - name: Test
         run: pnpm run test
 
+  # `@amika/service-auth`, which `@amika/sandbox` and amika-hostd depend on.
+  check-service-auth:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: js/service-auth
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+        working-directory: .
+
+      - name: Format check
+        run: pnpm run formatcheck
+
+      - name: Typecheck
+        run: pnpm run typecheck
+
+      - name: Lint
+        run: pnpm run lint
+
+      - name: Test
+        run: pnpm run test
+
   check-eslint-rules:
     runs-on: ubuntu-latest
     defaults:

@@ -5,15 +5,15 @@
  * A link serves a service under `/v0beta1/rigs/<rig>/service-links/<name>/
  * <token>/`, but most dev servers (Vite, Next.js) write root-relative URLs
  * into their pages: `/@vite/client`, `/_next/static/...`, `/api/...`. Those
- * reach hostd with no rig, service, or token, so on their own they could only
- * be refused.
+ * reach the server with no rig, service, or token, so on their own they
+ * could only be refused.
  *
  * Opening a link in a browser therefore also sets this cookie, naming the
- * link's rig, service, and token. A request outside hostd's own paths
- * (`isHostdPath`) that carries it is verified exactly as the link would be
- * and forwarded to that service, with its path as the guest path. The cookie
- * grants what the link grants, until the link's own expiry, and is never
- * forwarded to a guest.
+ * link's rig, service, and token. A request outside the server's own paths
+ * (the gateway's `isOwnPath`) that carries it is verified exactly as the
+ * link would be and forwarded to that service, with its path as the guest
+ * path. The cookie grants what the link grants, until the link's own
+ * expiry, and is never forwarded to a guest.
  *
  * Only a request the browser marks as the origin's own (`Sec-Fetch-Site:
  * same-origin`, or `none` for one the user started) may use the cookie, and
@@ -31,7 +31,7 @@
  * preview would isolate them (KAPRO-1038).
  */
 import { BlockList, isIP } from "node:net";
-import { AMIKAD_SERVICE } from "./services.js";
+import { AMIKAD_SERVICE, type GatewayRequest } from "./routes";
 
 /**
  * `__Host-` makes the browser insist on `Secure`, `Path=/`, and no `Domain`,
@@ -64,13 +64,13 @@ export interface LinkCookieClaim {
  * same-origin mark. `HttpOnly`: a guest's script cannot read the token.
  */
 export function linkCookie(
-  request: Request,
+  request: Pick<GatewayRequest, "url" | "headers">,
   link: LinkCookieClaim,
   nowS = Math.floor(Date.now() / 1000),
 ): string | null {
   if (request.headers.get("sec-fetch-mode") !== "navigate") return null;
   if (link.service === AMIKAD_SERVICE) return null;
-  const { hostname, port } = new URL(request.url);
+  const { hostname, port } = request.url;
   if (isLoopbackHost(hostname) || port !== "") return null;
   const maxAge = Number(link.token.split(".")[0]) - nowS;
   if (!Number.isSafeInteger(maxAge) || maxAge <= 0) return null;
@@ -108,7 +108,7 @@ export function linkFromCookie(
 
 /**
  * `cookieHeader` without the link cookie, or null when nothing else is left:
- * the token is hostd's, so a guest never sees it.
+ * the token is the gateway's, so a guest never sees it.
  */
 export function withoutLinkCookie(
   cookieHeader: string | null | undefined,
@@ -118,22 +118,6 @@ export function withoutLinkCookie(
     .map((pair) => pair.trim())
     .filter((pair) => pair && pair.split("=")[0].trim() !== LINK_COOKIE);
   return kept.length ? kept.join("; ") : null;
-}
-
-/**
- * Whether `pathname` is hostd's own, never a guest's through the cookie: the
- * versioned API (`/v0beta1/...`, every rig, service, and link route), the
- * legacy machine API, and `/health`. Everything else on the host belongs to
- * the service the cookie names.
- */
-export function isHostdPath(pathname: string): boolean {
-  return (
-    pathname === "/health" ||
-    pathname === "/v0beta1" ||
-    pathname.startsWith("/v0beta1/") ||
-    pathname === "/api/v1/machines" ||
-    pathname.startsWith("/api/v1/machines/")
-  );
 }
 
 /**
