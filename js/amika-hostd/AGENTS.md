@@ -723,8 +723,11 @@ with no credential in it, opened with a session cookie instead
 - hostd sets none of these cookies on a loopback address or an explicit
   port; `/__amika/login` answers `400` there. Its login responses are
   `no-store`.
-- hostd strips all of its cookies (`__Host-amika-*`) from every forwarded
-  request, and drops any `Set-Cookie` of a guest's under that prefix.
+- hostd strips its own cookies from every forwarded request, and drops any
+  `Set-Cookie` of a guest's under `__Host-amika-`. That keeps a guest's
+  server out of the login; a guest's page shares the origin, and its script
+  could still set a cookie where none is held, as a host is one trusted
+  unit.
 
 ## API versions
 

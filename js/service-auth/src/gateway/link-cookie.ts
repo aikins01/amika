@@ -50,8 +50,10 @@ export const LOGIN_STATE_COOKIE = "__Host-amika-login";
 
 /**
  * Whether a guest's `Set-Cookie` would set one of the gateway's cookies, or
- * any cookie under their prefix: a guest must not log a browser in, out, or
- * into another login.
+ * any cookie under their prefix, so a guest's server cannot log a browser
+ * in, out, or into another login. Defence in depth only: a guest's page
+ * shares the origin, and its script can still set such a cookie where none
+ * is held, as a host is one trusted unit.
  */
 export function setsGatewayCookie(setCookie: string): boolean {
   const eq = setCookie.indexOf("=");

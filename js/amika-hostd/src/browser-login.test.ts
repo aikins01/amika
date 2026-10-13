@@ -133,6 +133,32 @@ describe("browser login", () => {
     expect(response.status).toBe(401);
   });
 
+  // The pass and the session are for the origin the login started at.
+  it("refuses a callback at another origin than the login's", async () => {
+    const { app } = host();
+    const { stateCookie, pass } = await logIn(app);
+    const response = await app.request(
+      "https://preview.example:8443/__amika/callback",
+      {
+        method: "POST",
+        headers: { Cookie: stateCookie },
+        body: new URLSearchParams({ pass }),
+      },
+    );
+    expect(response.status).toBe(401);
+    expect(response.headers.getSetCookie()).toEqual([]);
+  });
+
+  it("refuses a callback body over its limit before reading it", async () => {
+    const body = new URLSearchParams({ pass: "x".repeat(32 * 1024) });
+    const response = await host().app.request(`${HOST}/__amika/callback`, {
+      method: "POST",
+      headers: { "Content-Length": String(body.toString().length) },
+      body,
+    });
+    expect(response.status).toBe(413);
+  });
+
   it("refuses a pass with no login state at all", async () => {
     const { app } = host();
     const { pass } = await logIn(app);

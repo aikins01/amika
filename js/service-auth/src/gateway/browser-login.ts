@@ -167,7 +167,10 @@ export async function finishLogin(
  * value is resolved as a browser would resolve `Location`, which drops tabs
  * and newlines and reads `\` as `/`, so `/\t/evil.example` cannot slip
  * through as `//evil.example`; what comes back is the resolved path and
- * query, percent-encoded.
+ * query, percent-encoded. That result is checked too, as dot segments
+ * collapse only once resolved: `/..//evil.example` resolves within the
+ * origin to the path `//evil.example`, which a browser would not. Its
+ * length is bounded encoded, as it is carried in a cookie.
  */
 function returnPath(value: string | null): string {
   if (!value?.startsWith("/") || value.length > MAX_RETURN_PATH_LENGTH) {
@@ -179,9 +182,14 @@ function returnPath(value: string | null): string {
   } catch {
     return "/";
   }
-  if (resolved.origin !== RETURN_BASE) return "/";
   const back = `${resolved.pathname}${resolved.search}`;
-  if (back.startsWith(LOGIN_PATH) || back.startsWith(CALLBACK_PATH)) {
+  if (
+    resolved.origin !== RETURN_BASE ||
+    back.startsWith("//") ||
+    back.length > MAX_RETURN_PATH_LENGTH ||
+    back.startsWith(LOGIN_PATH) ||
+    back.startsWith(CALLBACK_PATH)
+  ) {
     return "/";
   }
   return back;

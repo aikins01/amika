@@ -19,9 +19,9 @@
  * and `finishLogin`. The session it sets opens previews, which come next.
  *
  * Every credential is the gateway's: the server forwards none of them
- * (`isCredentialHeader`, `guestCookies`), a guest may set none of the
- * gateway's cookies (`finish`), and responses on a link are hardened
- * (`harden`), since their URL is a credential.
+ * (`isCredentialHeader`, `guestCookies`), it drops a guest's `Set-Cookie`
+ * for any of the gateway's cookies (`finish`), and responses on a link are
+ * hardened (`harden`), since their URL is a credential.
  */
 import {
   SERVICE_KEY_HEADER,
