@@ -120,6 +120,17 @@ describe("login passes", () => {
     );
   });
 
+  // Even when the browser's cookie holds the same malformed state.
+  it("treats a signed pass with a malformed state as malformed", async () => {
+    const token = signRaw("amika-hostd login passes v1", {
+      o: ORIGIN,
+      s: "short",
+      u: "u",
+      e: NOW + 60,
+    });
+    expect(await verify(token, { state: "short" })).toBe("malformed");
+  });
+
   it("refuses to sign for a malformed state", async () => {
     await expect(
       signLoginPass(SECRET, { ...PASS, state: "short" }, NOW),

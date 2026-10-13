@@ -195,8 +195,8 @@ const PASS = {
   schema: z.strictObject({
     /** The origin the pass is for. */
     o: z.string(),
-    /** The login state it answers. */
-    s: z.string(),
+    /** The login state it answers, as `signLoginPass` requires it. */
+    s: z.string().regex(STATE_PATTERN),
     /** The user's Amika id. */
     u: z.string(),
     /** Expiry, Unix seconds. */
