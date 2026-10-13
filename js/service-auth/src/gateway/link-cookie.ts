@@ -40,6 +40,33 @@ import { AMIKAD_SERVICE, type GatewayRequest } from "./routes";
  */
 export const LINK_COOKIE = "__Host-amika-service-link";
 
+/**
+ * The gateway's cookies for browser login (`./browser-login.ts`): the
+ * signed browser session, and a login in progress. Like the link cookie,
+ * neither reaches a guest.
+ */
+export const SESSION_COOKIE = "__Host-amika-session";
+export const LOGIN_STATE_COOKIE = "__Host-amika-login";
+
+/**
+ * Whether a guest's `Set-Cookie` would set one of the gateway's cookies, or
+ * any cookie under their prefix: a guest must not log a browser in, out, or
+ * into another login.
+ */
+export function setsGatewayCookie(setCookie: string): boolean {
+  const eq = setCookie.indexOf("=");
+  const name = (eq < 0 ? setCookie : setCookie.slice(0, eq)).trim();
+  return name.toLowerCase().startsWith(GATEWAY_COOKIE_PREFIX);
+}
+
+const GATEWAY_COOKIE_PREFIX = "__host-amika-";
+
+const GATEWAY_COOKIES: ReadonlySet<string> = new Set([
+  LINK_COOKIE,
+  SESSION_COOKIE,
+  LOGIN_STATE_COOKIE,
+]);
+
 /** What the cookie names: a link's rig, service, and token. */
 export interface LinkCookieClaim {
   machine: string;
@@ -107,17 +134,23 @@ export function linkFromCookie(
 }
 
 /**
- * `cookieHeader` without the link cookie, or null when nothing else is left:
- * the token is the gateway's, so a guest never sees it.
+ * `cookieHeader` without the gateway's cookies, or null when nothing else is
+ * left: they are the gateway's credentials and state, so a guest never sees
+ * them.
  */
-export function withoutLinkCookie(
+export function withoutGatewayCookies(
   cookieHeader: string | null | undefined,
 ): string | null {
   const kept = (cookieHeader ?? "")
     .split(";")
     .map((pair) => pair.trim())
-    .filter((pair) => pair && pair.split("=")[0].trim() !== LINK_COOKIE);
+    .filter((pair) => pair && !GATEWAY_COOKIES.has(pair.split("=")[0].trim()));
   return kept.length ? kept.join("; ") : null;
+}
+
+/** Whether `cookieHeader` may carry one of the gateway's cookies. */
+export function carriesGatewayCookie(cookieHeader: string): boolean {
+  return cookieHeader.includes("__Host-amika-");
 }
 
 /**
@@ -151,7 +184,7 @@ LOCAL_ADDRESSES.addAddress("0.0.0.0", "ipv4");
 LOCAL_ADDRESSES.addAddress("::1", "ipv6");
 LOCAL_ADDRESSES.addAddress("::", "ipv6");
 
-function cookieValues(cookieHeader: string | null | undefined) {
+export function cookieValues(cookieHeader: string | null | undefined) {
   const values = new Map<string, string>();
   for (const pair of (cookieHeader ?? "").split(";")) {
     const eq = pair.indexOf("=");

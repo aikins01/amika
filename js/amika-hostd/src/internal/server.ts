@@ -55,6 +55,7 @@ export function startServer(
       images: config.images,
       configPath: config.configPath,
       requestTimeoutMs: config.smolRequestTimeoutMs,
+      amikaUrl: config.apiUrl,
     },
     runtime,
     { registry, hiddenMachines },

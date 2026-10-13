@@ -21,6 +21,7 @@ import {
   hardenServiceLinkResponse,
   type Gateway,
 } from "@amika/service-auth/gateway";
+import { CALLBACK_PATH, LOGIN_PATH } from "@amika/service-auth/credentials";
 import {
   hostdGateway,
   resolveHostPort,
@@ -48,6 +49,11 @@ export interface AppConfig {
    * 504. The runtime call itself carries on (an image pull, say).
    */
   requestTimeoutMs?: number;
+  /**
+   * Amika's URL, where a browser is sent to log in
+   * (`@amika/service-auth/gateway`). Without it hostd logs no browser in.
+   */
+  amikaUrl?: string;
 }
 
 export interface AppDeps {
@@ -69,6 +75,7 @@ export function createApp(
     images = {},
     configPath,
     requestTimeoutMs = DEFAULT_REQUEST_TIMEOUT_MS,
+    amikaUrl,
   }: AppConfig,
   runtime: MachineRuntime,
   {
@@ -132,7 +139,7 @@ export function createApp(
   // Service routes, service-link routes and a guest path the link cookie
   // claims are the gateway's: it checks each before the body is touched
   // (`@amika/service-auth/gateway`). Everything else needs the secret key.
-  const gateway = hostdGateway(secretKey);
+  const gateway = hostdGateway(secretKey, amikaUrl);
   const checkSecretKey = requireSecretKey(secretKey);
   app.use("*", (c, next) =>
     gateway.claims(fromRequest(c.req.raw)) ? next() : checkSecretKey(c, next),
@@ -168,6 +175,13 @@ export function createApp(
   app.all(`${RIGS_ROUTE}/:name/service-links/:service/:token/*`, (c) =>
     proxyService(c.req.raw, gateway, runtime, registry, fetcher),
   );
+  // Browser login through Amika; nothing needs its session yet.
+  if (gateway.servesPreviews) {
+    app.get(LOGIN_PATH, (c) => gateway.startLogin(c.req.raw));
+    app.post(CALLBACK_PATH, bodyLimit({ maxSize: 16 * 1024 }), (c) =>
+      gateway.finishLogin(c.req.raw),
+    );
+  }
   // The machine API, at its versioned path and at the unversioned path
   // control planes on providers older than `v0beta1` still call.
   for (const machines of [RIGS_ROUTE, LEGACY_MACHINES_ROUTE]) {

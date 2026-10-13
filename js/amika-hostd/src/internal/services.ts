@@ -31,9 +31,12 @@ import type { MachineRuntime } from "./machine-runtime.js";
 /** amikad's guest port, as Amika registers it. */
 export const AMIKAD_PORT = 60999;
 
-/** hostd's gateway: the secret key, and the paths that are hostd's own. */
-export function hostdGateway(secretKey: string): Gateway {
-  return createGateway({ secretKey, isOwnPath: isHostdPath });
+/**
+ * hostd's gateway: the secret key, the paths that are hostd's own, and
+ * Amika's URL, which turns on browser login.
+ */
+export function hostdGateway(secretKey: string, amikaUrl?: string): Gateway {
+  return createGateway({ secretKey, isOwnPath: isHostdPath, amikaUrl });
 }
 
 /**
