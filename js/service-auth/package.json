@@ -14,6 +14,9 @@
     "formatcheck": "prettier --check .",
     "test": "vitest run --passWithNoTests"
   },
+  "dependencies": {
+    "zod": "4.4.3"
+  },
   "devDependencies": {
     "@eslint/js": "^9.39.2",
     "@types/node": "^22",

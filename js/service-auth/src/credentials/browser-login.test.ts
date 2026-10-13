@@ -1,0 +1,253 @@
+/** Cover login passes, sessions, preview paths and which origins can log in. */
+import { createHmac } from "node:crypto";
+import { describe, expect, it } from "vitest";
+import {
+  LOGIN_PASS_TTL_S,
+  SESSION_TTL_S,
+  isBrowserLoginOrigin,
+  previewPath,
+  signLoginPass,
+  signSession,
+  verifyLoginPass,
+  verifySession,
+} from "./browser-login";
+import { signServiceLink } from "./service-links";
+
+const SECRET = "0123456789abcdef0123456789abcdef";
+const NOW = 1_791_417_600;
+const ORIGIN = "https://preview.example";
+const STATE = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
+const PASS = { origin: ORIGIN, state: STATE, user: "user_1" };
+
+/** `body` signed under `label`'s derived key, whatever its shape. */
+function signRaw(label: string, body: unknown): string {
+  const key = createHmac("sha256", SECRET).update(label).digest();
+  const payload = Buffer.from(JSON.stringify(body)).toString("base64url");
+  return `${payload}.${createHmac("sha256", key).update(payload).digest("base64url")}`;
+}
+
+describe("login passes", () => {
+  const verify = (
+    token: string,
+    { origin = ORIGIN, state = STATE, now = NOW, secret = SECRET } = {},
+  ) => verifyLoginPass(secret, token, { origin, state }, now);
+
+  it("signs the payload under the documented derived key", async () => {
+    // Independent of the module: Amika and hostd must agree on this.
+    const key = createHmac("sha256", SECRET)
+      .update("amika-hostd login passes v1")
+      .digest();
+    const token = await signLoginPass(SECRET, PASS, NOW);
+    const [payload, signature] = token.split(".");
+    expect(
+      JSON.parse(Buffer.from(payload!, "base64url").toString("utf8")),
+    ).toEqual({ o: ORIGIN, s: STATE, u: "user_1", e: NOW + LOGIN_PASS_TTL_S });
+    expect(signature).toBe(
+      createHmac("sha256", key).update(payload!).digest("base64url"),
+    );
+  });
+
+  it("vouches for its user until it expires, give or take clock skew", async () => {
+    const token = await signLoginPass(SECRET, PASS, NOW);
+    expect(await verify(token)).toEqual({ user: "user_1" });
+    // A host whose clock runs up to five minutes ahead of Amika's.
+    const expiry = NOW + LOGIN_PASS_TTL_S;
+    expect(await verify(token, { now: expiry + 299 })).toEqual({
+      user: "user_1",
+    });
+    expect(await verify(token, { now: expiry + 300 })).toBe("expired");
+  });
+
+  it("accepts a pass from a clock running ahead of the host's", async () => {
+    // Amika five minutes ahead: the pass claims a life it cannot have yet.
+    const token = await signLoginPass(SECRET, PASS, NOW + 300);
+    expect(await verify(token)).toEqual({ user: "user_1" });
+  });
+
+  it.each([
+    ["another origin", { origin: "https://other.example" }],
+    ["another login's state", { state: `B${STATE.slice(1)}` }],
+    ["another host's secret key", { secret: `${SECRET}x` }],
+  ])("refuses a pass for %s", async (_label, options) => {
+    const token = await signLoginPass(SECRET, PASS, NOW);
+    expect(await verify(token, options)).toBe("invalid");
+  });
+
+  it("refuses a pass that claims to outlive any pass", async () => {
+    // As only a buggy or forged issuer could mint one: a clock more than five
+    // minutes ahead looks the same.
+    expect(await verify(await signLoginPass(SECRET, PASS, NOW + 301))).toBe(
+      "invalid",
+    );
+    expect(await verify(await signLoginPass(SECRET, PASS, NOW + 3600))).toBe(
+      "invalid",
+    );
+  });
+
+  it("refuses an edited payload", async () => {
+    const token = await signLoginPass(SECRET, PASS, NOW);
+    const [, signature] = token.split(".");
+    const forged = Buffer.from(
+      JSON.stringify({ o: ORIGIN, s: STATE, u: "admin", e: NOW + 60 }),
+    ).toString("base64url");
+    expect(await verify(`${forged}.${signature}`)).toBe("invalid");
+  });
+
+  // Each credential has its own derived key, so none stands in for another.
+  it("refuses a session or a service link as a pass", async () => {
+    const session = await signSession(SECRET, PASS, NOW);
+    expect(await verify(session)).toBe("invalid");
+    const link = await signServiceLink(SECRET, {
+      rig: "demo",
+      service: "web",
+      expiresAt: NOW + 60,
+    });
+    expect(await verify(link)).toBe("invalid");
+  });
+
+  it.each(["", ".", "abc", "abc.def", `${"a".repeat(3000)}.x`, "a b.c"])(
+    "treats %j as malformed",
+    async (token) => {
+      expect(await verify(token)).toBe("malformed");
+    },
+  );
+
+  // Correctly signed, so only the payload's shape can refuse them.
+  it.each([
+    ["an extra field", { o: ORIGIN, s: STATE, u: "u", e: NOW + 60, x: 1 }],
+    ["a missing user", { o: ORIGIN, s: STATE, e: NOW + 60 }],
+    ["no state", { o: ORIGIN, u: "u", e: NOW + 60 }],
+    ["a fractional expiry", { o: ORIGIN, s: STATE, u: "u", e: NOW + 0.5 }],
+    ["an array", [ORIGIN, STATE, "u", NOW + 60]],
+  ])("treats a signed payload with %s as malformed", async (_label, body) => {
+    expect(await verify(signRaw("amika-hostd login passes v1", body))).toBe(
+      "malformed",
+    );
+  });
+
+  // Even when the browser's cookie holds the same malformed state.
+  it("treats a signed pass with a malformed state as malformed", async () => {
+    const token = signRaw("amika-hostd login passes v1", {
+      o: ORIGIN,
+      s: "short",
+      u: "u",
+      e: NOW + 60,
+    });
+    expect(await verify(token, { state: "short" })).toBe("malformed");
+  });
+
+  it("refuses to sign for a malformed state", async () => {
+    await expect(
+      signLoginPass(SECRET, { ...PASS, state: "short" }, NOW),
+    ).rejects.toThrow("state");
+  });
+
+  it("refuses to sign what it could not verify", async () => {
+    await expect(signLoginPass(SECRET, PASS, NOW + 0.5)).rejects.toThrow();
+    await expect(signSession(SECRET, PASS, NOW + 0.5)).rejects.toThrow();
+  });
+});
+
+describe("sessions", () => {
+  const verify = (token: string, { origin = ORIGIN, now = NOW } = {}) =>
+    verifySession(SECRET, token, { origin }, now);
+
+  it("vouches for its user at its origin for a day", async () => {
+    const token = await signSession(SECRET, PASS, NOW);
+    expect(await verify(token)).toEqual({
+      user: "user_1",
+      expiresAt: NOW + SESSION_TTL_S,
+    });
+    expect(await verify(token, { now: NOW + SESSION_TTL_S })).toBe("expired");
+    expect(await verify(token, { origin: "https://other.example" })).toBe(
+      "invalid",
+    );
+  });
+
+  it("refuses a session that claims to outlive any session", async () => {
+    expect(await verify(await signSession(SECRET, PASS, NOW + 300))).toEqual({
+      user: "user_1",
+      expiresAt: NOW + 300 + SESSION_TTL_S,
+    });
+    expect(await verify(await signSession(SECRET, PASS, NOW + 301))).toBe(
+      "invalid",
+    );
+  });
+
+  // A session never signs a state: one that has one is no session.
+  it("treats a signed session with a state as malformed", async () => {
+    const token = signRaw("amika-hostd sessions v1", {
+      o: ORIGIN,
+      s: STATE,
+      u: "u",
+      e: NOW + 60,
+    });
+    expect(await verify(token)).toBe("malformed");
+  });
+
+  it("refuses a login pass as a session", async () => {
+    const pass = await signLoginPass(SECRET, PASS, NOW);
+    expect(await verify(pass)).toBe("invalid");
+  });
+});
+
+describe("previewPath", () => {
+  it("encodes the service as one segment and ends in a slash", () => {
+    expect(previewPath("/v0beta1/rigs", "demo", "Coding Agent/v2")).toBe(
+      "/v0beta1/rigs/demo/previews/Coding%20Agent%2Fv2/",
+    );
+  });
+
+  it.each(["", ".", ".."])("refuses %j, not a segment of its own", (name) => {
+    expect(() => previewPath("/v0beta1/rigs", "demo", name)).toThrow(
+      "Invalid service name",
+    );
+  });
+});
+
+describe("isBrowserLoginOrigin", () => {
+  it.each([
+    "https://preview.example",
+    "https://preview.example/",
+    "https://abc.ngrok.app",
+    "https://203.0.113.7",
+    "https://[2001:db8::1]",
+  ])("accepts %s", (url) => {
+    expect(isBrowserLoginOrigin(url)).toBe(true);
+  });
+
+  it.each([
+    ["plain http", "http://preview.example"],
+    ["an explicit port", "https://preview.example:8443"],
+    ["a path", "https://example.com/hostd/"],
+    ["a query", "https://preview.example?tenant=x"],
+    ["a fragment", "https://preview.example/#x"],
+    ["an empty query", "https://preview.example?"],
+    ["an empty fragment", "https://preview.example#"],
+    ["empty userinfo", "https://:@preview.example"],
+    ["a spelled-out default port", "https://preview.example:443"],
+    ["uppercase", "https://PREVIEW.example"],
+    ["a dot segment", "https://preview.example/."],
+    ["localhost", "https://localhost"],
+    ["a localhost subdomain", "https://a.localhost"],
+    ["localhost with trailing dots", "https://localhost.."],
+    ["a loopback address with trailing dots", "https://127.0.0.1.."],
+    ["a loopback address", "https://127.0.0.1"],
+    ["a loopback address at the top of its range", "https://127.255.255.254"],
+    ["the unspecified address", "https://0.0.0.0"],
+    ["IPv6 loopback", "https://[::1]"],
+    ["the IPv6 unspecified address", "https://[::]"],
+    ["the IPv4-mapped unspecified address", "https://[::ffff:0:0]"],
+    ["IPv4-mapped loopback", "https://[::ffff:7f00:1]"],
+    [
+      "IPv4-mapped loopback at the top of its range",
+      "https://[::ffff:7fff:ffff]",
+    ],
+    // Refused for their spelling before their address is looked at.
+    ["a non-canonical loopback spelling", "https://0x7f.1"],
+    ["a non-canonical IPv4-mapped spelling", "https://[::ffff:127.0.0.1]"],
+    ["not a URL", "preview.example"],
+  ])("refuses %s", (_label, url) => {
+    expect(isBrowserLoginOrigin(url)).toBe(false);
+  });
+});

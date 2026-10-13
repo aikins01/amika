@@ -144,6 +144,10 @@ importers:
         version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@22.20.1)(vite@7.3.5(@types/node@22.20.1)(tsx@4.21.0)(yaml@2.9.0))
 
   js/service-auth:
+    dependencies:
+      zod:
+        specifier: 4.4.3
+        version: 4.4.3
     devDependencies:
       '@eslint/js':
         specifier: ^9.39.2

@@ -4,10 +4,10 @@ Who may reach a rig's service, and the credentials that say so. Kept apart
 from amika-hostd so the auth proxy can become its own package, or a service
 in front of hosts, without untangling it from the daemon.
 
-| Entry point                       | What it holds                                                               |
-| --------------------------------- | --------------------------------------------------------------------------- |
-| `@amika/service-auth/credentials` | Signing and verifying service links and service tokens (`src/credentials/`) |
-| `@amika/service-auth/gateway`     | Deciding each request: forward, refuse, or not ours (`src/gateway/`)        |
+| Entry point                       | What it holds                                                                                               |
+| --------------------------------- | ----------------------------------------------------------------------------------------------------------- |
+| `@amika/service-auth/credentials` | Signing and verifying service links, service tokens, browser login passes and sessions (`src/credentials/`) |
+| `@amika/service-auth/gateway`     | Deciding each request: forward, refuse, or not ours (`src/gateway/`)                                        |
 
 The control plane (amika-mono, through `@amika/sandbox`) signs credentials;
 a gateway verifies them with the same host secret key, so neither calls the
