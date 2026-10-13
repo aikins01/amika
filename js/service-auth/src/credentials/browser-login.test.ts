@@ -19,6 +19,13 @@ const ORIGIN = "https://preview.example";
 const STATE = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
 const PASS = { origin: ORIGIN, state: STATE, user: "user_1" };
 
+/** `body` signed under `label`'s derived key, whatever its shape. */
+function signRaw(label: string, body: unknown): string {
+  const key = createHmac("sha256", SECRET).update(label).digest();
+  const payload = Buffer.from(JSON.stringify(body)).toString("base64url");
+  return `${payload}.${createHmac("sha256", key).update(payload).digest("base64url")}`;
+}
+
 describe("login passes", () => {
   const verify = (
     token: string,
@@ -104,17 +111,13 @@ describe("login passes", () => {
   it.each([
     ["an extra field", { o: ORIGIN, s: STATE, u: "u", e: NOW + 60, x: 1 }],
     ["a missing user", { o: ORIGIN, s: STATE, e: NOW + 60 }],
+    ["no state", { o: ORIGIN, u: "u", e: NOW + 60 }],
     ["a fractional expiry", { o: ORIGIN, s: STATE, u: "u", e: NOW + 0.5 }],
     ["an array", [ORIGIN, STATE, "u", NOW + 60]],
   ])("treats a signed payload with %s as malformed", async (_label, body) => {
-    const key = createHmac("sha256", SECRET)
-      .update("amika-hostd login passes v1")
-      .digest();
-    const payload = Buffer.from(JSON.stringify(body)).toString("base64url");
-    const signature = createHmac("sha256", key)
-      .update(payload)
-      .digest("base64url");
-    expect(await verify(`${payload}.${signature}`)).toBe("malformed");
+    expect(await verify(signRaw("amika-hostd login passes v1", body))).toBe(
+      "malformed",
+    );
   });
 
   it("refuses to sign for a malformed state", async () => {
@@ -138,6 +141,17 @@ describe("sessions", () => {
     expect(await verify(token, { origin: "https://other.example" })).toBe(
       "invalid",
     );
+  });
+
+  // A session never signs a state: one that has one is no session.
+  it("treats a signed session with a state as malformed", async () => {
+    const token = signRaw("amika-hostd sessions v1", {
+      o: ORIGIN,
+      s: STATE,
+      u: "u",
+      e: NOW + 60,
+    });
+    expect(await verify(token)).toBe("malformed");
   });
 
   it("refuses a login pass as a session", async () => {

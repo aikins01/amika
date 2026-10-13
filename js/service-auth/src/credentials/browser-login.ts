@@ -72,7 +72,7 @@ export async function signLoginPass(
   nowS = Math.floor(Date.now() / 1000),
 ): Promise<string> {
   if (!STATE_PATTERN.test(state)) throw new Error("Invalid login state");
-  return signPayload(PASS_KEY_LABEL, secretKey, {
+  return signPayload(PASS, secretKey, {
     o: origin,
     s: state,
     u: user,
@@ -91,7 +91,7 @@ export async function verifyLoginPass(
   { origin, state }: { origin: string; state: string },
   nowS: number,
 ): Promise<{ user: string } | CredentialProblem> {
-  const payload = await verifyPayload(PASS_KEY_LABEL, secretKey, token);
+  const payload = await verifyPayload(PASS, secretKey, token);
   if (typeof payload === "string") return payload;
   if (payload.o !== origin || payload.s !== state) return "invalid";
   // Amika signs passes on its clock and hostd checks them on its own, so
@@ -108,7 +108,7 @@ export async function signSession(
   { origin, user }: { origin: string; user: string },
   nowS = Math.floor(Date.now() / 1000),
 ): Promise<string> {
-  return signPayload(SESSION_KEY_LABEL, secretKey, {
+  return signPayload(SESSION, secretKey, {
     o: origin,
     u: user,
     e: nowS + SESSION_TTL_S,
@@ -122,7 +122,7 @@ export async function verifySession(
   { origin }: { origin: string },
   nowS: number,
 ): Promise<{ user: string; expiresAt: number } | CredentialProblem> {
-  const payload = await verifyPayload(SESSION_KEY_LABEL, secretKey, token);
+  const payload = await verifyPayload(SESSION, secretKey, token);
   if (typeof payload === "string") return payload;
   if (payload.o !== origin) return "invalid";
   if (payload.e - nowS > SESSION_TTL_S + CLOCK_SKEW_S) return "invalid";
@@ -183,39 +183,58 @@ export function isBrowserLoginOrigin(url: string): boolean {
 }
 
 /**
- * What a pass or a session says. Strict, so a payload with anything more than
- * Amika signs is refused rather than partly read.
+ * What a pass and a session each say, under the key each is signed with.
+ * Strict, so a payload with anything but what Amika signs for its kind is
+ * refused rather than partly read.
  */
-const payloadSchema = z.strictObject({
-  /** The origin the credential is for. */
-  o: z.string(),
-  /** A pass's login state. */
-  s: z.string().optional(),
-  /** The user's Amika id. */
-  u: z.string(),
-  /** Expiry, Unix seconds. */
-  e: z.int(),
-});
+const PASS = {
+  label: PASS_KEY_LABEL,
+  schema: z.strictObject({
+    /** The origin the pass is for. */
+    o: z.string(),
+    /** The login state it answers. */
+    s: z.string(),
+    /** The user's Amika id. */
+    u: z.string(),
+    /** Expiry, Unix seconds. */
+    e: z.int(),
+  }),
+};
 
-type Payload = z.infer<typeof payloadSchema>;
+const SESSION = {
+  label: SESSION_KEY_LABEL,
+  schema: z.strictObject({
+    /** The origin the session is for. */
+    o: z.string(),
+    /** The user's Amika id. */
+    u: z.string(),
+    /** Expiry, Unix seconds. */
+    e: z.int(),
+  }),
+};
+
+interface CredentialKind<Schema extends z.ZodType> {
+  label: string;
+  schema: Schema;
+}
 
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
 
-async function signPayload(
-  label: string,
+async function signPayload<Schema extends z.ZodType>(
+  { label }: CredentialKind<Schema>,
   secretKey: string,
-  payload: Payload,
+  payload: z.infer<Schema>,
 ): Promise<string> {
   const encoded = toBase64Url(encoder.encode(JSON.stringify(payload)));
   return `${encoded}.${await signText(label, secretKey, encoded)}`;
 }
 
-async function verifyPayload(
-  label: string,
+async function verifyPayload<Schema extends z.ZodType>(
+  { label, schema }: CredentialKind<Schema>,
   secretKey: string,
   token: string,
-): Promise<Payload | "malformed" | "invalid"> {
+): Promise<z.infer<Schema> | "malformed" | "invalid"> {
   const dot = token.indexOf(".");
   if (dot <= 0 || token.length > MAX_TOKEN_LENGTH) return "malformed";
   const encoded = token.slice(0, dot);
@@ -234,6 +253,6 @@ async function verifyPayload(
   } catch {
     return "malformed";
   }
-  const parsed = payloadSchema.safeParse(payload);
+  const parsed = schema.safeParse(payload);
   return parsed.success ? parsed.data : "malformed";
 }
