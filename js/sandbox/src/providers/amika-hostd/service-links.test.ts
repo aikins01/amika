@@ -2,9 +2,13 @@
 import { createHmac } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import {
+  DEFAULT_SERVICE_TOKEN_TTL_S,
+  MAX_SERVICE_TOKEN_TTL_S,
   serviceLinkPath,
   signServiceLink,
+  signServiceToken,
   verifyServiceLink,
+  verifyServiceToken,
 } from "./service-links";
 
 const SECRET = "0123456789abcdef0123456789abcdef";
@@ -106,4 +110,77 @@ describe("service links", () => {
       serviceLinkPath("/v0beta1/rigs", "demo", "Coding Agent/v2", "1.sig"),
     ).toBe("/v0beta1/rigs/demo/service-links/Coding%20Agent%2Fv2/1.sig/");
   });
+});
+
+describe("service tokens", () => {
+  const TARGET = { rig: "demo", service: "frontend" };
+  const verifyToken = (
+    token: string,
+    { rig = TARGET.rig, service = TARGET.service, now = NOW } = {},
+  ) => verifyServiceToken(SECRET, { rig, service, token }, now);
+
+  it("signs the documented text under its own derived key", async () => {
+    // Independent of the module: hostd and the provider must agree on this.
+    const tokenKey = createHmac("sha256", SECRET)
+      .update("amika-hostd service tokens v1")
+      .digest();
+    const expiresAt = NOW + DEFAULT_SERVICE_TOKEN_TTL_S;
+    const signature = createHmac("sha256", tokenKey)
+      .update(`v1\ndemo\nfrontend\n${expiresAt}`)
+      .digest("base64url");
+    expect(await signServiceToken(SECRET, TARGET, { nowS: NOW })).toBe(
+      `${expiresAt}.${signature}`,
+    );
+  });
+
+  it("verifies its own token until the expiry", async () => {
+    const token = await signServiceToken(SECRET, TARGET, {
+      nowS: NOW,
+      ttlS: 600,
+    });
+    expect(await verifyToken(token)).toBeNull();
+    expect(await verifyToken(token, { now: NOW + 599 })).toBeNull();
+    expect(await verifyToken(token, { now: NOW + 600 })).toBe("expired");
+  });
+
+  it.each([
+    ["another rig", { rig: "other" }],
+    ["another service", { service: "backend" }],
+  ])("refuses a token for %s", async (_label, options) => {
+    const token = await signServiceToken(SECRET, TARGET, { nowS: NOW });
+    expect(await verifyToken(token, options)).toBe("invalid");
+  });
+
+  // The two keys differ, so neither credential stands in for the other.
+  it("refuses a link's token as a service token, and the reverse", async () => {
+    const claim = { ...TARGET, expiresAt: NOW + 600 };
+    const linkToken = await signServiceLink(SECRET, claim);
+    expect(await verifyToken(linkToken)).toBe("invalid");
+
+    const serviceToken = await signServiceToken(SECRET, TARGET, {
+      nowS: NOW,
+      ttlS: 600,
+    });
+    expect(await verify(serviceToken)).toBe("invalid");
+  });
+
+  it("refuses a token that claims to outlive the maximum", async () => {
+    // As only an issuer that ignores the cap could mint one.
+    const token = await signServiceToken(SECRET, TARGET, {
+      nowS: NOW + 3600,
+      ttlS: MAX_SERVICE_TOKEN_TTL_S,
+    });
+    expect(await verifyToken(token)).toBe("invalid");
+    // Within the allowed clock skew, it is accepted.
+    expect(await verifyToken(token, { now: NOW + 3600 - 60 })).toBeNull();
+  });
+
+  it.each([0, -1, 1.5, MAX_SERVICE_TOKEN_TTL_S + 1])(
+    "refuses to sign a lifetime of %d seconds",
+    async (ttlS) => {
+      await expect(
+        signServiceToken(SECRET, TARGET, { nowS: NOW, ttlS }),
+      ).rejects.toThrow("lifetime");
+    },
+  );
 });

@@ -670,6 +670,17 @@ service with its whole path as the guest path, HTTP and WebSocket upgrades
 - The key goes in `X-Amika-Hostd-Key`, since `Authorization` belongs to the
   guest (`amikad` checks SSH connect tokens with it). hostd never forwards
   the key.
+- A caller without the key, such as `curl` or a script, may send a service
+  token instead: `X-Amika-Authorization: Bearer <token>`. The control plane
+  mints it (`signServiceToken` in `@amika/sandbox/hostd-service-links`) for
+  one machine's one service, for at most a day: the same claim a link signs,
+  under a second key derived from the secret key, so a link's token never
+  works as a service token or the other way round. hostd refuses a token
+  that claims to live longer, never accepts one for `amikad`, and strips
+  the header before forwarding, HTTP and upgrades alike. A `401` on a
+  service route carries a `hint` saying where a token goes, except for
+  `amikad`; it names no CLI command until the CLI has one. `GET /health` lists `service-tokens` in `features` so a control
+  plane knows the host takes them (KAPRO-1038).
 - One request needs no key: the SSH WebSocket that `amika sandbox ssh`
   opens, exactly `GET .../services/amikad/v1/ssh-sessions` as an upgrade,
   to a running rig whose `amikad` is on port 60999. `amikad` checks the
@@ -688,15 +699,17 @@ hostd and the control plane upgrade independently, so hostd's API is
 versioned. `/v0beta1/rigs` is the current API: the machine routes (create,
 get, delete, start, stop, exec, files, services), the service routes and
 the service-link routes.
-`GET /health` lists the versions served (`{ "status": "ok", "apis":
-["v0beta1"] }`). `/api/v1/machines` serves the same machine routes, without
+`GET /health` lists the versions served and the features a control plane may
+rely on (`{ "status": "ok", "apis": ["v0beta1"], "features":
+["service-tokens"] }`). `/api/v1/machines` serves the same machine routes, without
 service routes, for control planes on providers from before `v0beta1`; remove
 it once none are deployed. Change a version's contract only in a new version.
 
 ## Authentication
 
 Every route, including `/health` and unknown paths, requires the secret key:
-in `X-Amika-Hostd-Key` on service routes, as a signed link on service-link
+in `X-Amika-Hostd-Key` (or a service token in `X-Amika-Authorization`) on
+service routes, as a signed link on service-link
 routes, or as the link cookie on a path outside hostd's own (see
 [Service routes](#service-routes)), otherwise as
 `Authorization: Bearer <secret key>` (the scheme the Amika CLI uses for API
