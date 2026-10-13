@@ -433,12 +433,27 @@ function tokenHint(
   token: string | null,
 ): { hint?: string } {
   if (!route || route.service === AMIKAD_SERVICE) return {};
-  const command = `amika service curl ${route.machine} ${route.service} ${route.path}`;
+  const command = [
+    "amika service curl",
+    shellArg(route.machine),
+    shellArg(route.service),
+    shellArg(route.path),
+  ].join(" ");
   return {
     hint: token
       ? `The service token is invalid or expired. Get a new one, or run: ${command}`
       : `Send a service token in X-Amika-Authorization: Bearer <token>, or run: ${command}`,
   };
+}
+
+/**
+ * `value` as one POSIX shell word, so a hint copied into a terminal runs as
+ * shown: a service name is free text and a path may hold `;`, `$` or quotes.
+ * Plain words stay bare; anything else is single-quoted.
+ */
+export function shellArg(value: string): string {
+  if (/^[A-Za-z0-9_@%+=:,./-]+$/.test(value)) return value;
+  return `'${value.replace(/'/g, `'\\''`)}'`;
 }
 
 /**
