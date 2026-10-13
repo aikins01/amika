@@ -733,6 +733,7 @@ describe("amika-hostd services", () => {
       'one port per service name; "web" declares 3000 and 3001',
     ],
     ["a dot-segment name", [{ ...WEB, name: ".." }], 'named ".."'],
+    ["an empty name", [{ ...WEB, name: "" }], 'named ""'],
   ])("refuses %s rather than misroute", (_label, services, message) => {
     expect(() => hostdServiceRoutes(services as SandboxService[])).toThrow(
       message,

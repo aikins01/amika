@@ -199,7 +199,7 @@ export function serviceLinkPath(
   token: string,
 ): string {
   if (service === "" || service === "." || service === "..") {
-    throw new Error(`Invalid service name: ${service}`);
+    throw new Error(`Invalid service name: ${JSON.stringify(service)}`);
   }
   return `${rigsPath}/${rig}/${SERVICE_LINKS_SEGMENT}/${encodeURIComponent(service)}/${token}/`;
 }

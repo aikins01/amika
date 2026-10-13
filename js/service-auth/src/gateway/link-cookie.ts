@@ -129,7 +129,8 @@ export function withoutLinkCookie(
  * against the IPv4 rules.
  */
 export function isLoopbackHost(hostname: string): boolean {
-  // A name with trailing dots is the same name to a resolver.
+  // One trailing dot is the same name to a resolver; more make no valid
+  // name, so read them the cautious way too.
   const name = hostname.replace(/\.+$/, "").toLowerCase();
   if (name === "localhost" || name.endsWith(".localhost")) return true;
   const address = name.replace(/^\[(.*)\]$/, "$1");

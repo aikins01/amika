@@ -142,7 +142,7 @@ export function previewPath(
   service: string,
 ): string {
   if (service === "" || service === "." || service === "..") {
-    throw new Error(`Invalid service name: ${service}`);
+    throw new Error(`Invalid service name: ${JSON.stringify(service)}`);
   }
   return `${rigsPath}/${rig}/${PREVIEWS_SEGMENT}/${encodeURIComponent(service)}/`;
 }
@@ -173,7 +173,8 @@ export function isBrowserLoginOrigin(url: string): boolean {
   ) {
     return false;
   }
-  // A name with trailing dots is the same name to a resolver.
+  // One trailing dot is the same name to a resolver; more make no valid
+  // name, so read them the cautious way too.
   const host = parsed.hostname.replace(/\.+$/, "");
   if (host === "localhost" || host.endsWith(".localhost")) return false;
   if (/^\d+\.\d+\.\d+\.\d+$/.test(host)) {
