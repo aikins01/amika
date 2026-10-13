@@ -57,6 +57,13 @@ through Amika or `client.rigs.get(name)` and delete it when you are finished.
 Omitting `agentCredentials` injects no agent credentials; `{ kind: "claude" }`
 asks the server to select a stored Claude credential.
 
+Rigs run on Amika Cloud unless you pass `hostId`, the ID of one of your
+organization's own hosts (bring-your-own compute), to place the rig there.
+With `hostId` set, `size` names one of that host's own sizes, and the server
+rejects `provider` and `snapshot`. A control plane too old to support hosts
+ignores `hostId` and builds the rig on Amika Cloud, so check that the created
+rig's `rig.hostId` matches before relying on the placement.
+
 ## Fetch a rig, or construct a handle
 
 `get()` makes a request immediately and rejects if the rig is missing or

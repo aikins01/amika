@@ -310,4 +310,27 @@ describe("AmikaClient rig decoding", () => {
       github_auth_mode: "app",
     });
   });
+
+  it("sends host_id when createRig is given a hostId", async () => {
+    const { fetch, calls } = mockFetch([
+      { status: 202, body: { id: "1", host_id: "host_1" } },
+    ]);
+    const rig = await makeClient(fetch).createRig({
+      hostId: "host_1",
+      size: "small",
+    });
+    expect(JSON.parse(calls[0]?.body ?? "")).toEqual({
+      host_id: "host_1",
+      size: "small",
+    });
+    expect(rig.hostId).toBe("host_1");
+  });
+
+  it("rejects a blank hostId without sending a request", async () => {
+    const { fetch, calls } = mockFetch([]);
+    await expect(
+      makeClient(fetch).rigs.create({ hostId: " " }),
+    ).rejects.toThrow("hostId must not be empty");
+    expect(calls).toHaveLength(0);
+  });
 });

@@ -40,6 +40,7 @@ export function createRigRequestToWire(
     branch: r.branch,
     new_branch_name: r.newBranchName,
     github_auth_mode: r.githubAuthMode,
+    host_id: r.hostId,
   });
 }
 

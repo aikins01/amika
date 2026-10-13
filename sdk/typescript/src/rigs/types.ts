@@ -102,6 +102,18 @@ export interface CreateRigRequest {
   newBranchName?: string;
   /** GitHub authentication mode supported by the server, such as pat or app_token. Omit to use its default. */
   githubAuthMode?: string;
+  /**
+   * ID (not hostname) of one of the organization's own hosts
+   * (bring-your-own compute) to run the rig on instead of an Amika Cloud
+   * provider. Omit to run on Amika Cloud; an empty string is rejected. With
+   * it set, `size` names one of that host's own sizes, and the server refuses
+   * `provider` and `snapshot`.
+   *
+   * A control plane that predates host placement silently drops this field
+   * and builds the rig on Amika Cloud, so confirm that
+   * {@link RemoteRig.hostId} on the created rig matches.
+   */
+  hostId?: string;
 }
 
 /** @deprecated Use {@link CreateRigRequest}. */
