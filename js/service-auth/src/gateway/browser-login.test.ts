@@ -140,7 +140,9 @@ describe("previews", () => {
   });
 
   // Once a session expires, a reload of a root-relative page must not get
-  // stuck on 401: it logs in again and returns to the same path.
+  // stuck on 401: it logs in again and returns to the same guest path,
+  // through the preview's own, as the Strict preview cookie is not sent on
+  // the redirect back from Amika's site.
   it("sends a cookie-routed page load whose session expired to log in", async () => {
     const expired = await session(ORIGIN, 1_000_000);
     expect(
@@ -153,7 +155,7 @@ describe("previews", () => {
       ),
     ).toEqual({
       kind: "login",
-      location: `/__amika/login?return=${encodeURIComponent("/docs")}`,
+      location: `/__amika/login?return=${encodeURIComponent("/v0beta1/rigs/demo/previews/web/docs")}`,
     });
   });
 
@@ -183,6 +185,40 @@ describe("previews", () => {
       setCookies: [],
     });
   });
+
+  it("renews the preview cookie on a page load it routes", async () => {
+    const decision = await gateway.authorize(
+      request("/docs", {
+        ...PAGE_LOAD,
+        Cookie: `${await session()}; __Host-amika-preview=demo/web`,
+        "Sec-Fetch-Site": "same-origin",
+      }),
+    );
+    expect(decision).toMatchObject({
+      kind: "forward",
+      route: { path: "/docs" },
+      setCookies: [
+        expect.stringMatching(/^__Host-amika-preview=demo\/web; /),
+        expect.stringMatching(/^__Host-amika-service-link=; .*Max-Age=0/),
+      ],
+    });
+  });
+
+  // A page's own script could set the cookie to anything.
+  it.each(["demo/%2E", "demo/%2e%2e", "demo/amikad"])(
+    "routes nothing by a preview cookie of %j",
+    async (value) => {
+      expect(
+        await gateway.authorize(
+          request("/docs", {
+            ...PAGE_LOAD,
+            Cookie: `${await session()}; __Host-amika-preview=${value}`,
+            "Sec-Fetch-Site": "same-origin",
+          }),
+        ),
+      ).toEqual({ kind: "not-mine" });
+    },
+  );
 
   // Opening either ends the other's cookie; this is only the tiebreak.
   it("lets a link cookie win when a browser holds both", async () => {

@@ -33,6 +33,7 @@ import {
   PREVIEWS_SEGMENT,
   SESSION_TTL_S,
   STATE_PATTERN,
+  previewPath,
   signSession,
   verifyLoginPass,
   verifySession,
@@ -72,11 +73,25 @@ export function browserOrigin(url: URL): string | null {
   return `https://${url.hostname}`;
 }
 
-/** Where to send a browser that wants `url` to log in, returning after. */
-export function loginLocation(url: URL): string {
-  const back = `${url.pathname}${url.search}`;
+/**
+ * Where to send a browser that wants `url` to log in, returning after. A
+ * root-relative URL the preview cookie routes (`cookieRoute`) returns
+ * through the preview's own path instead: the login's last redirect comes
+ * from Amika's site, so the `Strict` preview cookie is not sent on it, and
+ * opening the preview again renews that cookie.
+ */
+export function loginLocation(
+  url: URL,
+  cookieRoute?: Pick<ServiceRoute, "machine" | "service">,
+): string {
+  const path = cookieRoute
+    ? `${previewPath(RIGS_PATH, cookieRoute.machine, cookieRoute.service)}${url.pathname.slice(1)}`
+    : url.pathname;
+  const back = `${path}${url.search}`;
   return `${LOGIN_PATH}?${new URLSearchParams({ return: back })}`;
 }
+
+const RIGS_PATH = "/v0beta1/rigs";
 
 /** The redirect to `location`, which no cache keeps. */
 export function loginRedirect(location: string): Response {
@@ -213,7 +228,7 @@ export async function hasSession(
  */
 export function parsePreviewPath(pathname: string): ServiceRoute | null {
   const match = new RegExp(
-    `^/v0beta1/rigs/([a-zA-Z0-9][a-zA-Z0-9_-]*)/${PREVIEWS_SEGMENT}/([^/]+)(/.*)?$`,
+    `^${RIGS_PATH}/([a-zA-Z0-9][a-zA-Z0-9_-]*)/${PREVIEWS_SEGMENT}/([^/]+)(/.*)?$`,
   ).exec(pathname);
   if (!match) return null;
   let service: string;
@@ -292,7 +307,7 @@ export function previewFromCookie(
   } catch {
     return null;
   }
-  if (service === AMIKAD_SERVICE) return null;
+  if (service === AMIKAD_SERVICE || /^\.{0,2}$/.test(service)) return null;
   return { machine: match[1], service };
 }
 

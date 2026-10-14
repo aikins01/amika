@@ -195,7 +195,7 @@ describe("browser login", () => {
     });
     expect(response.status).toBe(302);
     expect(response.headers.get("location")).toBe(
-      `/__amika/login?return=${encodeURIComponent("/docs?tab=2")}`,
+      `/__amika/login?return=${encodeURIComponent("/v0beta1/rigs/demo/previews/web/docs?tab=2")}`,
     );
     expect(guest).not.toHaveBeenCalled();
   });

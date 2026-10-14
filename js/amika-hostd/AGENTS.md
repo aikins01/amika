@@ -707,7 +707,9 @@ with a session cookie instead, set after Amika vouched for its user
    `__Host-amika-login` (`SameSite=None`, 10 minutes) and redirects to
    `<api_url>/hosts/authorize?origin=<this host's origin>&state=<state>`.
    A page load a preview cookie routes (a root-relative URL) does the same,
-   returning to that path. Anything other than a page load gets `401`.
+   returning to its guest path through the preview's own: the Strict preview
+   cookie is not sent on the redirect back from Amika's site, and opening
+   the preview renews it. Anything other than a page load gets `401`.
 2. Amika checks the user is signed in and that one of their org's hosts is
    registered at that origin, then form-posts a login pass to that host's
    registered URL, `/__amika/callback`. The pass names the origin, state and
@@ -731,8 +733,9 @@ with a session cookie instead, set after Amika vouched for its user
 - Opening a preview sets `__Host-amika-preview` (rig and service, no
   credential), so the page's root-relative URLs and upgrades reach the same
   service, under the same `Sec-Fetch-Site` rule as the link cookie, and only
-  with the session too. Opening a preview ends the link cookie and opening a
-  link ends the preview cookie, so the one opened last owns the root.
+  with the session too. A page load it routes renews it. Opening a preview
+  ends the link cookie and opening a link ends the preview cookie, so the
+  one opened last owns the root.
 - The return path is resolved as a browser resolves `Location`, and anything
   that leaves the origin returns to `/`.
 - Preview responses drop `Service-Worker-Allowed` and set `X-Robots-Tag:

@@ -224,7 +224,10 @@ export function createGateway({
             request.method === "GET" &&
             headers.get("sec-fetch-mode") === "navigate"
           ) {
-            return { kind: "login", location: loginLocation(url) };
+            return {
+              kind: "login",
+              location: loginLocation(url, preview.cookie ? route : undefined),
+            };
           }
           return {
             kind: "refuse",
@@ -236,10 +239,10 @@ export function createGateway({
         if (!isOwnOrPageLoad(request, { upgrade })) {
           return { kind: "refuse", surface: "preview", status: 403 };
         }
-        // Opening a preview hands its root-relative URLs to this service.
+        // Opening a preview hands its root-relative URLs to this service,
+        // and a page load the cookie routes renews that cookie.
         return forward("preview", route, {
-          setCookies:
-            upgrade || preview.cookie ? [] : previewCookies(request, route),
+          setCookies: upgrade ? [] : previewCookies(request, route),
         });
       }
 
