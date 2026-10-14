@@ -107,11 +107,12 @@ export interface CreateRigRequest {
    * (bring-your-own compute) to run the rig on instead of an Amika Cloud
    * provider. Omit to run on Amika Cloud; an empty string is rejected. With
    * it set, `size` names one of that host's own sizes, and the server refuses
-   * `provider` and `snapshot`.
+   * `provider`, `snapshot`, `autoStopInterval`, and `autoDeleteInterval`.
    *
    * A control plane that predates host placement silently drops this field
-   * and builds the rig on Amika Cloud, so confirm that
-   * {@link RemoteRig.hostId} on the created rig matches.
+   * and builds the rig on Amika Cloud. The create response may not report
+   * {@link RemoteRig.hostId} yet, so confirm the placement after `rig.wait()`
+   * or `rig.refresh()`, not on the object `create` returns.
    */
   hostId?: string;
 }

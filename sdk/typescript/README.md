@@ -60,9 +60,18 @@ asks the server to select a stored Claude credential.
 Rigs run on Amika Cloud unless you pass `hostId`, the ID of one of your
 organization's own hosts (bring-your-own compute), to place the rig there.
 With `hostId` set, `size` names one of that host's own sizes, and the server
-rejects `provider` and `snapshot`. A control plane too old to support hosts
-ignores `hostId` and builds the rig on Amika Cloud, so check that the created
-rig's `rig.hostId` matches before relying on the placement.
+rejects `provider`, `snapshot`, `autoStopInterval`, and `autoDeleteInterval`.
+
+A control plane too old to support hosts ignores `hostId` and builds the rig on
+Amika Cloud. The create response may not report the host yet, so confirm the
+placement once the rig is up:
+
+```ts
+const rig = await client.rigs.create({ hostId, size: "small" });
+await rig.wait();
+if (rig.hostId !== hostId)
+  throw new Error(`rig ${rig.name} is not on ${hostId}`);
+```
 
 ## Fetch a rig, or construct a handle
 
