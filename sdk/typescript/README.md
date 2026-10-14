@@ -57,6 +57,25 @@ through Amika or `client.rigs.get(name)` and delete it when you are finished.
 Omitting `agentCredentials` injects no agent credentials; `{ kind: "claude" }`
 asks the server to select a stored Claude credential.
 
+Rigs run on Amika Cloud unless you pass `hostId`, the ID of one of your
+organization's own hosts (bring-your-own compute), to place the rig there.
+The SDK cannot list hosts yet: `amika host get <hostname>` prints a host's ID
+and its sizes. With `hostId` set, `size` names one of that host's own sizes,
+and the server rejects `provider`, `snapshot`, `autoStopInterval`, and
+`autoDeleteInterval`.
+
+A control plane too old to support hosts ignores `hostId` and builds the rig on
+Amika Cloud. The create response may not report the host yet, so confirm the
+placement once the rig is up:
+
+```ts
+const hostId = "host_123"; // The ID from `amika host get <hostname>`.
+const rig = await client.rigs.create({ hostId, size: "small" });
+await rig.wait();
+if (rig.hostId !== hostId)
+  throw new Error(`rig ${rig.name} is not on ${hostId}`);
+```
+
 ## Fetch a rig, or construct a handle
 
 `get()` makes a request immediately and rejects if the rig is missing or

@@ -1,4 +1,5 @@
 import type { AgentSessions } from "../agent-sessions/types.js";
+import { AmikaError } from "../errors.js";
 import { API_BASE_PATH } from "../internal/constants.js";
 import type { HTTPClient } from "../internal/http.js";
 import { mapArray } from "../internal/wire.js";
@@ -38,8 +39,15 @@ export function createRigs(
     agentSessions,
   };
   return {
-    create: async (request) =>
-      createRigResource(
+    create: async (request) => {
+      // A blank id is a failed substitution, not a request for Amika Cloud:
+      // sending it would leave the server to guess.
+      if (request.hostId !== undefined && !request.hostId.trim()) {
+        throw new AmikaError(
+          "hostId must not be empty; omit it to run the rig on Amika Cloud",
+        );
+      }
+      return createRigResource(
         remoteRigFromWire(
           (await http.doJSON<Record<string, unknown>>(
             "POST",
@@ -48,7 +56,8 @@ export function createRigs(
           )) ?? {},
         ),
         transport,
-      ),
+      );
+    },
     list: async () =>
       mapArray(
         await http.doJSON("GET", `${API_BASE_PATH}/rigs`),
