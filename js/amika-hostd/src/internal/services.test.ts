@@ -227,9 +227,12 @@ describe("createUpgradeHandler", () => {
     await vi.waitFor(() => expect(answer).toMatch(/more bytes$/));
   });
 
-  it("ends a tunnel whose guest never finishes its answer", async () => {
+  it.each([
+    ["never finishes", ""],
+    ["finishes too late", "\r\n\r\n"],
+  ])("ends a tunnel whose guest's answer %s", async (_label, end) => {
     const target = await guest(
-      `HTTP/1.1 101 Switching Protocols\r\nX-Pad: ${"a".repeat(70_000)}`,
+      `HTTP/1.1 101 Switching Protocols\r\nX-Pad: ${"a".repeat(70_000)}${end}`,
     );
     const { port } = await hostd(target.port);
     const socket = await open(port, validPath());

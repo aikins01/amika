@@ -149,10 +149,11 @@ export function createUpgradeHandler(
     const onData = (chunk: Buffer) => {
       buffered = Buffer.concat([buffered, chunk]);
       const end = buffered.indexOf("\r\n\r\n");
-      if (end < 0) {
-        if (buffered.length > MAX_ANSWER_HEAD) upstream.destroy();
+      if ((end < 0 ? buffered.length : end) > MAX_ANSWER_HEAD) {
+        upstream.destroy();
         return;
       }
+      if (end < 0) return;
       upstream.off("data", onData);
       upstream.pause();
       const answer = gateway.finishUpgrade(
