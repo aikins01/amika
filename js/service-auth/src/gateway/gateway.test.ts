@@ -170,6 +170,31 @@ describe("createGateway", () => {
     expect(response.headers.getSetCookie()).toEqual(["theme=dark; Path=/"]);
   });
 
+  it("keeps a guest's upgrade answer from setting the gateway's cookies", () => {
+    expect(
+      gateway.finishUpgrade(
+        [
+          "HTTP/1.1 101 Switching Protocols",
+          "Upgrade: websocket",
+          "Set-Cookie: theme=dark; Path=/",
+          "set-cookie:__Host-amika-session=forged; Path=/",
+          "SET-COOKIE: __HOST-AMIKA-login=fixed",
+          // Folded: the name only appears once the line is unfolded.
+          "Set-Cookie:",
+          " __Host-amika-service-link=x; Path=/",
+          "Connection: Upgrade",
+        ].join("\r\n"),
+      ),
+    ).toBe(
+      [
+        "HTTP/1.1 101 Switching Protocols",
+        "Upgrade: websocket",
+        "Set-Cookie: theme=dark; Path=/",
+        "Connection: Upgrade",
+      ].join("\r\n"),
+    );
+  });
+
   it("hardens every answer on a link, and only there", async () => {
     const link = gateway.refusal({
       kind: "refuse",

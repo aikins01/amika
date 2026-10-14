@@ -724,7 +724,8 @@ with no credential in it, opened with a session cookie instead
   port; `/__amika/login` answers `400` there. Its login responses are
   `no-store`.
 - hostd strips its own cookies from every forwarded request, and drops any
-  `Set-Cookie` of a guest's under `__Host-amika-`. That keeps a guest's
+  `Set-Cookie` of a guest's under `__Host-amika-`, in a WebSocket
+  handshake's answer as in any other response. That keeps a guest's
   server out of the login; a guest's page shares the origin, and its script
   could still set a cookie where none is held, as a host is one trusted
   unit.

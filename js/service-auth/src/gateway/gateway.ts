@@ -20,8 +20,9 @@
  *
  * Every credential is the gateway's: the server forwards none of them
  * (`isCredentialHeader`, `guestCookies`), it drops a guest's `Set-Cookie`
- * for any of the gateway's cookies (`finish`), and responses on a link are
- * hardened (`harden`), since their URL is a credential.
+ * for any of the gateway's cookies (`finish`, `finishUpgrade`), and
+ * responses on a link are hardened (`harden`), since their URL is a
+ * credential.
  */
 import {
   SERVICE_KEY_HEADER,
@@ -250,6 +251,37 @@ export function createGateway({
         response.headers.append("set-cookie", decision.setCookie);
       }
       return harden(decision, response);
+    },
+
+    /**
+     * `finish` for an upgrade, which the server tunnels as bytes: the
+     * guest's raw answer to the handshake (its status line and header
+     * lines, without the blank line that ends them), less any cookie of
+     * ours it tries to set. A folded header line goes with the one it
+     * continues.
+     */
+    finishUpgrade(head: string): string {
+      const fields: string[][] = [];
+      for (const line of head.split("\r\n")) {
+        const last = fields.at(-1);
+        if (last && fields.length > 1 && /^[ \t]/.test(line)) last.push(line);
+        else fields.push([line]);
+      }
+      return fields
+        .filter(([first, ...folded], i) => {
+          if (i === 0) return true; // The status line.
+          const colon = first.indexOf(":");
+          if (
+            colon < 0 ||
+            first.slice(0, colon).trim().toLowerCase() !== "set-cookie"
+          ) {
+            return true;
+          }
+          const value = [first.slice(colon + 1), ...folded].join(" ");
+          return !setsGatewayCookie(value);
+        })
+        .flat()
+        .join("\r\n");
     },
 
     /**
