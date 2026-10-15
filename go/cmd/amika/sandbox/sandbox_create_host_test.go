@@ -172,8 +172,13 @@ func TestCreateHostRef(t *testing.T) {
 	// But whitespace is a value, not an absence: the send path forwards it
 	// verbatim, so letting it past here would turn a clear local error into
 	// a 400 from the API.
+	//
+	// --snapshot is not in this set any more. It is a flag a host rig may
+	// legitimately carry, so there is no local rule left to enforce, and a
+	// whitespace-only value reaches the server exactly as it does without
+	// --host -- the same 400, from the same check, either way.
 	t.Run("refuses a whitespace-only value for those flags", func(t *testing.T) {
-		for _, conflict := range []string{"snapshot", "provider"} {
+		for _, conflict := range []string{"provider"} {
 			c := newCmd()
 			c.Flags().Set("host", "alpha.lan")
 			c.Flags().Set(conflict, "  ")
@@ -403,7 +408,10 @@ func TestCreateRemoteSandboxSendsHostID(t *testing.T) {
 	if got := (*body)["host_id"]; got != "host_1" {
 		t.Errorf("host_id = %v, want host_1 (body: %v)", got, *body)
 	}
-	// A host rig takes neither of these, and the API refuses both with host_id.
+	// `provider` the API refuses alongside host_id outright. `snapshot` it
+	// now accepts, which is exactly why an unset flag must still not reach
+	// the body: an empty value would once have been stopped by the local
+	// guard, and is now a request the server has to answer.
 	for _, forbidden := range []string{"provider", "snapshot"} {
 		if _, ok := (*body)[forbidden]; ok {
 			t.Errorf("body carries %q: %v", forbidden, *body)
