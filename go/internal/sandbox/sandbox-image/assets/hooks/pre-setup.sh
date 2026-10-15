@@ -27,6 +27,35 @@ AMIKA_TMP_DIR="/tmp/amikad"
 AMIKA_USER_TMP_DIR="/tmp/amika"
 AMIKA_CWD_FILE="$AMIKA_STATE_DIR/agent-cwd"
 
+# Give amika everything under the given paths. A rig booted from a snapshot
+# can carry symlinks whose owner cannot be changed: in a machine made from a
+# smolvm pack, `chown -h` on a symlink the source machine created fails with
+# ENOENT though the link is fine (seen on smolvm 1.22 and 1.28). A plain
+# `chown -R` stops at the first one, so when it fails, recreate each such
+# link, which makes it an ordinary one, and run it again. Only a rig's first
+# boot from a snapshot takes the slow path, until it is snapshotted again.
+own_by_amika() {
+  chown -R amika:amika "$@" 2>/dev/null && return
+  local link target tmpdir
+  # `find` passes on only the links whose owner `chown -h` cannot change.
+  # Each is replaced by renaming a new link over it, so a link is never
+  # missing, even if making its replacement fails. The new link is made in a
+  # fresh directory beside it, so its name collides with nothing and stays
+  # short however long the link's own name is.
+  while IFS= read -r -d '' link; do
+    # Command substitution strips trailing newlines, which a target may
+    # end in; the `x` keeps them, and only readlink's own newline is cut.
+    target="$(readlink -- "$link"; printf x)"
+    target="${target%$'\nx'}"
+    tmpdir="$(mktemp -d -- "${link%/*}/.amika-relink.XXXXXX")"
+    ln -s -- "$target" "$tmpdir/link"
+    mv -Tf -- "$tmpdir/link" "$link"
+    rmdir -- "$tmpdir"
+    chown -h -- amika:amika "$link"
+  done < <(find "$@" -type l ! -exec chown -h amika:amika {} \; -print0 2>/dev/null)
+  chown -R amika:amika "$@"
+}
+
 if [[ -n "${AMIKA_AGENT_CWD:-}" ]]; then
   amika_agent_cwd="$AMIKA_AGENT_CWD"
 elif [[ -f "$AMIKA_CWD_FILE" ]]; then
@@ -40,7 +69,7 @@ mkdir -p \
   "$AMIKA_LOG_DIR" "$AMIKA_USER_LOG_DIR" \
   "$AMIKA_RUN_DIR" "$AMIKA_USER_RUN_DIR" \
   "$AMIKA_TMP_DIR" "$AMIKA_USER_TMP_DIR"
-chown -R amika:amika \
+own_by_amika \
   "$AMIKA_USER_STATE_DIR" \
   "$AMIKA_USER_LOG_DIR" \
   "$AMIKA_USER_RUN_DIR" \
@@ -104,34 +133,6 @@ fi
 if [[ -f /usr/local/etc/amika/dind-enabled ]]; then
   /usr/lib/amikad/docker-setup.sh
 fi
-
-# Give amika everything under the given paths. A rig booted from a snapshot
-# can carry symlinks whose owner cannot be changed: in a machine made from a
-# smolvm pack, `chown -h` on a symlink the source machine created fails with
-# ENOENT though the link is fine (seen on smolvm 1.22 and 1.28). A plain
-# `chown -R` stops at the first one, so when it fails, recreate each such
-# link, which makes it an ordinary one, and run it again. Only a rig's first
-# boot from a snapshot takes the slow path, until it is snapshotted again.
-own_by_amika() {
-  chown -R amika:amika "$@" 2>/dev/null && return
-  local link target tmp
-  # `find` passes on only the links whose owner `chown -h` cannot change.
-  # Each is replaced by renaming a new link over it, so a link is never
-  # missing, even if making its replacement fails. The new link gets a short
-  # name of its own: a suffix on a name already near the length limit would
-  # not fit.
-  while IFS= read -r -d '' link; do
-    # Command substitution strips trailing newlines, which a target may
-    # end in; the `x` keeps them, and only readlink's own newline is cut.
-    target="$(readlink -- "$link"; printf x)"
-    target="${target%$'\nx'}"
-    tmp="${link%/*}/.amika-relink-$$"
-    ln -sfn -- "$target" "$tmp"
-    mv -Tf -- "$tmp" "$link"
-    chown -h -- amika:amika "$link"
-  done < <(find "$@" -type l ! -exec chown -h amika:amika {} \; -print0 2>/dev/null)
-  chown -R amika:amika "$@"
-}
 
 # Configure pnpm global bin directory so setup.sh can run `pnpm add -g`.
 # Create as root first because Docker bind-mounts (e.g. agent credential files
