@@ -223,10 +223,14 @@ func runSnapshotList(cmd *cobra.Command, _ []string) error {
 
 	w := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 4, 2, ' ', 0)
 	if long {
-		fmt.Fprintln(w, "NAME\tSTATE\tPROVIDER\tSOURCE\tSIZE\tBASE\tDESCRIPTION\tCREATED\tERROR")
+		// HOST only here: a snapshot on one of the organization's own hosts
+		// boots a rig on that host alone, so which host it is matters once
+		// you are picking one to boot from.
+		fmt.Fprintln(w, "NAME\tSTATE\tPROVIDER\tHOST\tSOURCE\tSIZE\tBASE\tDESCRIPTION\tCREATED\tERROR")
 		for _, s := range snapshots {
-			fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
-				s.Snapshot, s.State, s.Provider, snapshotSource(s),
+			fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
+				s.Snapshot, s.State, s.Provider, deref(s.HostID),
+				snapshotSource(s),
 				deref(s.SandboxSize), deref(s.BaseSnapshot), deref(s.Description),
 				s.CreatedAt, deref(s.ErrorMessage))
 		}

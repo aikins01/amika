@@ -125,11 +125,20 @@ func TestCreateHostRef(t *testing.T) {
 		}
 	})
 
-	// Each conflict gets its own reason: a base-image sentence explains
-	// --snapshot and says nothing at all about --provider.
+	// A host rig boots its own host's snapshots, so --snapshot is passed
+	// through and the server decides: only a snapshot taken on THIS host can
+	// boot here, which is not a question the CLI can answer.
+	t.Run("passes --snapshot through with --host", func(t *testing.T) {
+		c := newCmd()
+		c.Flags().Set("host", "alpha.lan")
+		c.Flags().Set("snapshot", "nightly")
+		if ref, err := createHostRef(c); err != nil || ref != "alpha.lan" {
+			t.Errorf("createHostRef with --snapshot = %q, %v; want the host", ref, err)
+		}
+	})
+
 	t.Run("refuses the flags a host rig cannot honor", func(t *testing.T) {
 		for _, tt := range []struct{ flag, why string }{
-			{"snapshot", "boots its preset's base image"},
 			{"provider", "not on a cloud provider"},
 		} {
 			c := newCmd()

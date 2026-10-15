@@ -424,6 +424,7 @@ type SandboxSnapshot struct {
 	ID                string                       `json:"id"`
 	Snapshot          string                       `json:"snapshot"`
 	Provider          string                       `json:"provider"`
+	HostID            *string                      `json:"host_id"`
 	Description       *string                      `json:"description"`
 	SourceSandboxID   *string                      `json:"source_sandbox_id"`
 	SourceSandboxName *string                      `json:"source_sandbox_name"`
