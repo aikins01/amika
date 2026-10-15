@@ -111,18 +111,19 @@ fi
 # ENOENT though the link is fine (seen on smolvm 1.22 and 1.28). A plain
 # `chown -R` stops at the first one, so when it fails, recreate each such
 # link, which makes it an ordinary one, and run it again. Only a rig's first
-# boot from a snapshot takes the slow path; every later boot finds links it
-# can change.
+# boot from a snapshot takes the slow path, until it is snapshotted again.
 own_by_amika() {
   chown -R amika:amika "$@" 2>/dev/null && return
   local link target
+  # `find` passes on only the links whose owner `chown -h` cannot change.
+  # Each is replaced by renaming a new link over it, so a link is never
+  # missing, even if making its replacement fails.
   while IFS= read -r -d '' link; do
-    chown -h amika:amika "$link" 2>/dev/null && continue
-    target="$(readlink "$link")"
-    rm -f "$link"
-    ln -s "$target" "$link"
-    chown -h amika:amika "$link"
-  done < <(find "$@" -type l -print0)
+    target="$(readlink -- "$link")"
+    ln -sfn -- "$target" "$link.amika-relink"
+    mv -Tf -- "$link.amika-relink" "$link"
+    chown -h -- amika:amika "$link"
+  done < <(find "$@" -type l ! -exec chown -h amika:amika {} \; -print0 2>/dev/null)
   chown -R amika:amika "$@"
 }
 
