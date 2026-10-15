@@ -283,6 +283,23 @@ describe("startCapture", () => {
     );
   });
 
+  it("starts no pack once the daemon is already stopping", async () => {
+    const { deps, store, pack } = harness();
+    // A listener added to an aborted signal never fires, so a pack spawned
+    // after the daemon began stopping would never be signalled: a capture
+    // queued behind another reaches here exactly then.
+    deps.signal = AbortSignal.abort();
+
+    await (
+      await startCapture({ rig: "rig-1", name: "org/sandbox/a" }, deps)
+    ).done;
+    expect(pack.calls).toEqual([]);
+    expect(store.get("org/sandbox/a")).toMatchObject({
+      state: "failed",
+      errorReason: expect.stringContaining("stopping"),
+    });
+  });
+
   it("signals the pack's whole process group, not just its leader", async () => {
     // A pack boots a helper VM to read the rig's disks. Killing the leader
     // alone leaves that helper holding them and holding the pipe `close`

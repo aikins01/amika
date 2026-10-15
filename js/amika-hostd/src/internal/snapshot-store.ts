@@ -412,15 +412,19 @@ function adopt(staged: string, destination: string): void {
 }
 
 /**
- * The artifact directory, owner-only. `mkdirSync`'s `mode` applies only to
- * directories it creates, and `snapshot_dir` may name one an operator made
- * themselves. A failure is left to the first capture to report, since a
- * daemon that cannot pack still serves every other route.
+ * The artifact directory, owner-only where it is hostd's to say so.
+ * `mkdirSync` returns the first path it created, so a `snapshot_dir` an
+ * operator made themselves is left exactly as they made it rather than
+ * silently relabelled: an artifact is made `0600` on its way in either way,
+ * which is the protection that matters. A failure is left to the first
+ * capture to report, since a daemon that cannot pack still serves every
+ * other route.
  */
 function ensurePrivate(directory: string): void {
   try {
-    mkdirSync(directory, { recursive: true, mode: 0o700 });
-    chmodSync(directory, 0o700);
+    if (mkdirSync(directory, { recursive: true, mode: 0o700 }) !== undefined) {
+      chmodSync(directory, 0o700);
+    }
   } catch {
     // Reported by the capture that cannot stage into it.
   }

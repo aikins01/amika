@@ -113,10 +113,12 @@ describe("taking a snapshot", () => {
     const { store, root, reopen } = open();
     const directory = path.join(root, "snapshots");
     const mode = (file: string) => statSync(file).mode & 0o777;
-    // An operator can point `snapshot_dir` at a directory they made
-    // themselves, where `mkdirSync`'s mode never applies, and the pack
-    // writes its artifact under smolvm's umask. An artifact is a whole image
-    // of a rig's disks, so neither of those decides who may read it.
+    // The pack writes its artifact under smolvm's umask, and an operator can
+    // point `snapshot_dir` at a directory of their own. An artifact is a
+    // whole image of a rig's disks, so neither of those decides who may read
+    // it: the directory hostd makes is its own to keep owner-only, and the
+    // artifact is made owner-only wherever it lands.
+    expect(mode(directory)).toBe(0o700);
     chmodSync(directory, 0o755);
     store.reserve({ name: "org/sandbox/a", sourceRig: "r" });
     const staged = stagePack(store);
@@ -124,8 +126,9 @@ describe("taking a snapshot", () => {
     store.activate("org/sandbox/a", staged);
     expect(mode(store.artifact("org/sandbox/a") as string)).toBe(0o600);
 
+    // A directory hostd did not create is the operator's, not hostd's.
     reopen();
-    expect(mode(directory)).toBe(0o700);
+    expect(mode(directory)).toBe(0o755);
   });
 
   it("gives names that slugify alike their own artifacts", () => {

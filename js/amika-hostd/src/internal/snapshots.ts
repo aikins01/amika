@@ -162,6 +162,15 @@ function runPack(
   { smolvm, env, spawn = nodeSpawn, signal }: CaptureDeps,
 ): Promise<void> {
   return new Promise((resolve, reject) => {
+    // A listener added to an already-aborted signal never fires, so a pack
+    // spawned after the daemon began stopping would never be signalled: it
+    // would hold the event loop open on its pipes for the whole pack, and
+    // outlive a `kill -9` into staging the next start removes. A capture
+    // queued behind another reaches here exactly then.
+    if (signal?.aborted) {
+      reject(new Error("the daemon is stopping"));
+      return;
+    }
     const child = spawn(
       smolvm,
       ["pack", "create", "--from-vm", rig, "-o", stub],
