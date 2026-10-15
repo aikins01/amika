@@ -36,22 +36,27 @@ AMIKA_CWD_FILE="$AMIKA_STATE_DIR/agent-cwd"
 # boot from a snapshot takes the slow path, until it is snapshotted again.
 own_by_amika() {
   chown -R amika:amika "$@" 2>/dev/null && return
-  local link target tmpdir
+  local link
   # `find` passes on only the links whose owner `chown -h` cannot change.
   # Each is replaced by renaming a new link over it, so a link is never
   # missing, even if making its replacement fails. The new link is made in a
-  # fresh directory beside it, so its name collides with nothing and stays
-  # short however long the link's own name is.
+  # fresh directory beside it, so its name collides with nothing, and all of
+  # it relative to the link's directory, so no name or path grows past the
+  # limits the link itself is within.
   while IFS= read -r -d '' link; do
-    # Command substitution strips trailing newlines, which a target may
-    # end in; the `x` keeps them, and only readlink's own newline is cut.
-    target="$(readlink -- "$link"; printf x)"
-    target="${target%$'\nx'}"
-    tmpdir="$(mktemp -d -- "${link%/*}/.amika-relink.XXXXXX")"
-    ln -s -- "$target" "$tmpdir/link"
-    mv -Tf -- "$tmpdir/link" "$link"
-    rmdir -- "$tmpdir"
-    chown -h -- amika:amika "$link"
+    (
+      cd -- "${link%/*}"
+      local name="${link##*/}" target tmpdir
+      # Command substitution strips trailing newlines, which a target may
+      # end in; the `x` keeps them, and only readlink's own newline is cut.
+      target="$(readlink -- "$name"; printf x)"
+      target="${target%$'\nx'}"
+      tmpdir="$(mktemp -d .amika-relink.XXXXXX)"
+      ln -s -- "$target" "$tmpdir/link"
+      mv -Tf -- "$tmpdir/link" "$name"
+      rmdir -- "$tmpdir"
+      chown -h -- amika:amika "$name"
+    )
   done < <(find "$@" -type l ! -exec chown -h amika:amika {} \; -print0 2>/dev/null)
   chown -R amika:amika "$@"
 }
