@@ -14,10 +14,11 @@
  */
 import type { Sandbox } from "@vercel/sandbox";
 import { shellQuote } from "../../../util/shell";
-import type {
-  ExecOptions,
-  ExecResult,
-  SandboxAdapter,
+import {
+  decodeUtf8,
+  type ExecOptions,
+  type ExecResult,
+  type SandboxAdapter,
 } from "../../shared/adapter";
 
 /**
@@ -145,11 +146,16 @@ export class VercelAdapter implements SandboxAdapter {
   }
 
   async downloadFile(path: string): Promise<string | null> {
+    const bytes = await this.downloadBytes(path);
+    return bytes === null ? null : decodeUtf8(bytes);
+  }
+
+  /** {@link downloadFile} without the UTF-8 decode. */
+  async downloadBytes(path: string): Promise<Uint8Array | null> {
     try {
-      const buffer = await this.timed(`read ${path}`, () =>
+      return await this.timed(`read ${path}`, () =>
         this.sandbox.readFileToBuffer({ path }),
       );
-      return buffer ? buffer.toString("utf8") : null;
     } catch {
       return null;
     }

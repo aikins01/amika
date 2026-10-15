@@ -15,6 +15,7 @@
  * sub-namespaces are `null` when the provider doesn't back them.
  */
 import { SandboxProviderUnsupportedError } from "../provider";
+import { decodeUtf8 } from "./adapter";
 import { scrubTargetsViaExec } from "./scrub-exec";
 import type {
   CloneRepoInput,
@@ -211,7 +212,12 @@ function makeSandbox(
       }
       return exec.stream(id, command, handlers);
     },
-    readFile: async (filePath) => requireFiles("readFile").read(id, filePath),
+    async readFile(filePath) {
+      const bytes = await requireFiles("readFile").read(id, filePath);
+      return bytes === null ? null : decodeUtf8(bytes);
+    },
+    readFileBytes: async (filePath) =>
+      requireFiles("readFileBytes").read(id, filePath),
     writeFile: async (filePath, content) =>
       requireFiles("writeFile").write(id, filePath, content),
     git: backend.cloneRepo ? makeSandboxGit(backend.cloneRepo, id) : null,

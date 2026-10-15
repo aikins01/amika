@@ -284,10 +284,10 @@ export async function readE2bFile(
   config: E2bConfig,
   providerSandboxId: string,
   filePath: string,
-): Promise<string | null> {
+): Promise<Uint8Array | null> {
   const sandbox = await connectE2bSandbox(config, providerSandboxId);
   try {
-    return await sandbox.files.read(filePath);
+    return await sandbox.files.read(filePath, { format: "bytes" });
   } catch (error) {
     if (error instanceof FileNotFoundError) return null;
     throw error;

@@ -13,7 +13,7 @@ import {
 import type { SandboxService } from "../../../types";
 import { DEFAULT_HOME_DIR } from "../../../constants";
 import { shellQuote } from "../../../util/shell";
-import { execFailureText } from "../../shared/adapter";
+import { decodeUtf8, execFailureText } from "../../shared/adapter";
 import type { SandboxAdapter } from "../../shared/adapter";
 import type { SandboxStatus } from "../../../sandbox-status";
 import {
@@ -71,7 +71,10 @@ export function smolOperations(
   const adapter = (id: string): SandboxAdapter => ({
     exec: (command, opts) => run(id, command, opts),
     uploadFile: (content, path) => write(id, path, content),
-    downloadFile: (path) => read(id, path),
+    downloadFile: async (path) => {
+      const bytes = await read(id, path);
+      return bytes === null ? null : decodeUtf8(bytes);
+    },
   });
   const run = (id: string, command: string, opts?: ExecCommandOptions) =>
     client.json(`${machinePath(id)}/exec`, execSchema, "POST", {
@@ -123,7 +126,7 @@ export function smolOperations(
       );
     }
   };
-  const read = async (id: string, path: string): Promise<string | null> => {
+  const read = async (id: string, path: string): Promise<Uint8Array | null> => {
     try {
       const response = await client.request(filePath(id, path));
       if (
@@ -136,7 +139,7 @@ export function smolOperations(
           "smolvm returned a directory or an unexpected file content type",
         );
       }
-      return await response.text();
+      return new Uint8Array(await response.arrayBuffer());
     } catch (error) {
       if (error instanceof SmolApiError && error.status === 404) return null;
       throw error;

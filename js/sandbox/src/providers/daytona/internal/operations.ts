@@ -381,12 +381,11 @@ export async function readSandboxFile(
   config: DaytonaConfig,
   providerSandboxId: string,
   filePath: string,
-): Promise<string | null> {
+): Promise<Uint8Array | null> {
   try {
     const daytona = getDaytonaClient(config);
     const sandbox = await daytona.get(providerSandboxId);
-    const content = await sandbox.fs.downloadFile(filePath);
-    return content.toString("utf8");
+    return await sandbox.fs.downloadFile(filePath);
   } catch {
     return null;
   }

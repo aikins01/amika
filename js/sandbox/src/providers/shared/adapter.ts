@@ -66,6 +66,14 @@ export interface SandboxAdapter {
 }
 
 /**
+ * Decode file bytes as UTF-8, replacing invalid sequences with U+FFFD. A
+ * leading BOM is kept, matching `Buffer#toString("utf8")`.
+ */
+export function decodeUtf8(bytes: Uint8Array): string {
+  return new TextDecoder("utf-8", { ignoreBOM: true }).decode(bytes);
+}
+
+/**
  * Run a command and throw when it exits non-zero. The adapter analogue of
  * Daytona's `executeCheckedCommand`; the thrown message carries the command's
  * stderr (falling back to stdout) so the failure is diagnosable.

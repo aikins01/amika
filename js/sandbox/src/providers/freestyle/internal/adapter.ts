@@ -15,6 +15,7 @@
 import type { Freestyle } from "freestyle";
 import { shellQuote } from "../../../util/shell";
 import {
+  decodeUtf8,
   execFailureText,
   type ExecOptions,
   type ExecResult,
@@ -207,9 +208,15 @@ export class FreestyleAdapter implements SandboxAdapter {
   }
 
   async downloadFile(path: string): Promise<string | null> {
+    const bytes = await this.downloadBytes(path);
+    return bytes === null ? null : decodeUtf8(bytes);
+  }
+
+  /** {@link downloadFile} without the UTF-8 decode. */
+  async downloadBytes(path: string): Promise<Uint8Array | null> {
     try {
       return await this.timed(`read ${path}`, () =>
-        this.userVm.fs.readTextFile(path),
+        this.userVm.fs.readFile(path),
       );
     } catch {
       return null;

@@ -277,7 +277,10 @@ describe("defineProvider object assembly", () => {
     const provider = build(
       { ...ALL_OFF, ssh: true },
       {
-        files: { read: async () => "contents", write: async () => {} },
+        files: {
+          read: async () => new TextEncoder().encode("contents"),
+          write: async () => {},
+        },
         ssh: {
           mint: async () => ({
             token: "t",

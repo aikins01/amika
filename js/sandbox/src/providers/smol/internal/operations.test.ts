@@ -361,6 +361,16 @@ describe("smol operations", () => {
     );
   });
 
+  it("reads a file's bytes without decoding them", async () => {
+    const raw = Uint8Array.of(0x63, 0x61, 0x66, 0xe9);
+    const { ops } = harness([
+      new Response(raw, {
+        headers: { "Content-Type": "application/octet-stream" },
+      }),
+    ]);
+    expect(await ops.read(INPUT.name, "/latin1.txt")).toEqual(raw);
+  });
+
   it("returns null only for missing files and rejects directory responses", async () => {
     const { ops } = harness([
       json({}, 404),

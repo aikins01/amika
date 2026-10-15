@@ -624,7 +624,8 @@ export interface ExecCapability {
 
 /** Read/write files inside the sandbox. */
 export interface FileCapability {
-  read(providerSandboxId: string, filePath: string): Promise<string | null>;
+  /** The file's raw bytes; `null` when it does not exist. */
+  read(providerSandboxId: string, filePath: string): Promise<Uint8Array | null>;
   write(
     providerSandboxId: string,
     filePath: string,
@@ -825,7 +826,7 @@ export interface ServiceRestartContext {
 
 /**
  * A provisioned sandbox. Methods that map to a nullable capability
- * (start/stop/state → the sandbox run-state ops, exec/streamExec → exec, readFile/writeFile → files)
+ * (start/stop/state → the sandbox run-state ops, exec/streamExec → exec, readFile/readFileBytes/writeFile → files)
  * throw {@link SandboxProviderUnsupportedError} when the provider doesn't back
  * them; the sub-namespaces (`git`, `ssh`, `services`, `snapshots`) are `null`
  * in that case so callers can presence-check instead.
@@ -847,7 +848,10 @@ export interface Sandbox {
   getRuntimeState(): Promise<SandboxStatus>;
   exec(command: string, opts?: ExecCommandOptions): Promise<SandboxExecResult>;
   streamExec(command: string, handlers: StreamCommandHandlers): Promise<void>;
+  /** The file decoded as UTF-8; `null` when it does not exist. */
   readFile(filePath: string): Promise<string | null>;
+  /** The file's raw bytes; `null` when it does not exist. */
+  readFileBytes(filePath: string): Promise<Uint8Array | null>;
   writeFile(filePath: string, content: Buffer | string): Promise<void>;
   /** Optional provider-native clone override; `null` → clone via adapter exec. */
   readonly git: SandboxGitNamespace | null;

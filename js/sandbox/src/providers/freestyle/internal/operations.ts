@@ -549,13 +549,13 @@ export async function readFreestyleFile(
   config: FreestyleConfig,
   providerSandboxId: string,
   filePath: string,
-): Promise<string | null> {
+): Promise<Uint8Array | null> {
   const client = createFreestyleClient(config);
   const adapter = new FreestyleAdapter(
     client.vms.ref({ vmId: providerSandboxId }),
     client,
   );
-  return adapter.downloadFile(filePath);
+  return adapter.downloadBytes(filePath);
 }
 
 export async function writeFreestyleFile(

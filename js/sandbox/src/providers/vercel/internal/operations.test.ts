@@ -15,6 +15,7 @@ import {
   portsForDesiredServices,
   vercelTimeoutMs,
   mapVercelSandboxState,
+  readVercelFile,
   writeVercelFile,
   writeVercelResumeContext,
   VERCEL_RESUME_CONTEXT_PATH,
@@ -450,6 +451,29 @@ describe("listVercelSandboxes", () => {
       (l) => l.providerSandboxId,
     );
     expect(ids).toEqual(["sbx-sized"]);
+  });
+});
+
+describe("readVercelFile", () => {
+  beforeEach(() => sandboxGet.mockReset());
+
+  it("returns the file's bytes undecoded, and null when there are none", async () => {
+    const raw = Buffer.from([0x63, 0x61, 0x66, 0xe9]);
+    const readFileToBuffer = vi
+      .fn()
+      .mockResolvedValueOnce(raw)
+      .mockResolvedValueOnce(null)
+      .mockRejectedValueOnce(new Error("gone"));
+    sandboxGet.mockResolvedValue({ readFileToBuffer });
+
+    await expect(readVercelFile(VERCEL_CONFIG, "sbx", "/f")).resolves.toBe(raw);
+    expect(readFileToBuffer).toHaveBeenCalledWith({ path: "/f" });
+    await expect(
+      readVercelFile(VERCEL_CONFIG, "sbx", "/f"),
+    ).resolves.toBeNull();
+    await expect(
+      readVercelFile(VERCEL_CONFIG, "sbx", "/f"),
+    ).resolves.toBeNull();
   });
 });
 

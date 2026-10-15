@@ -477,12 +477,12 @@ export async function readVercelFile(
   config: VercelConfig,
   providerSandboxId: string,
   filePath: string,
-): Promise<string | null> {
+): Promise<Uint8Array | null> {
   const sandbox = await getVercelSandbox(config, providerSandboxId, {
     resume: true,
   });
   const adapter = new VercelAdapter(sandbox);
-  return adapter.downloadFile(filePath);
+  return adapter.downloadBytes(filePath);
 }
 
 export async function writeVercelFile(
