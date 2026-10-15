@@ -94,11 +94,11 @@ async function capture(
 ): Promise<void> {
   try {
     await runCapture(rig, name, deps);
-  } catch (error) {
-    log(
-      deps,
-      `amika-hostd: snapshot ${name} failed, and so did recording it: ${failureReason(error)}`,
-    );
+  } catch {
+    // The last catch there is, so saying why has to be safe too: the reason
+    // was logged below before it was recorded, which is the step that fails
+    // here.
+    log(deps, `amika-hostd: snapshot ${name} failed, and so did recording it`);
   }
 }
 
@@ -112,8 +112,11 @@ async function runCapture(
   name: string,
   deps: CaptureDeps,
 ): Promise<void> {
-  const staging = deps.store.staging();
+  // Staging inside the `try`, so a directory that cannot be made is a failed
+  // snapshot like any other rather than one left `capturing` until a restart.
+  let staging: string | undefined;
   try {
+    staging = deps.store.staging();
     // `pack create -o X` writes an executable stub at X and the artifact at
     // X.smolmachine, and refuses an `-o` that already ends in `.smolmachine`.
     const stub = path.join(staging, "pack");
@@ -121,19 +124,19 @@ async function runCapture(
     await runPack(rig, stub, deps);
     deps.store.activate(name, `${stub}.smolmachine`);
   } catch (error) {
+    // Logged before it is recorded: recording is disk work that fails for
+    // the same reasons a pack does, and the reason should outlive it.
     const reason = failureReason(error);
-    deps.store.fail(name, reason);
     log(deps, `amika-hostd: could not take snapshot ${name}: ${reason}`);
+    deps.store.fail(name, reason);
   } finally {
     // Best effort: the artifact is adopted by now, and a staging directory
     // that will not go away must not replace the failure just recorded.
     try {
-      rmSync(staging, { recursive: true, force: true });
-    } catch (error) {
-      log(
-        deps,
-        `amika-hostd: could not clear snapshot staging: ${failureReason(error)}`,
-      );
+      if (staging !== undefined)
+        rmSync(staging, { recursive: true, force: true });
+    } catch {
+      log(deps, `amika-hostd: could not clear staging for snapshot ${name}`);
     }
   }
 }
@@ -177,11 +180,17 @@ function runPack(
     };
     child.stdout?.on("data", keep);
     child.stderr?.on("data", keep);
-    const timer = setTimeout(
-      () => stopPack(child, "SIGKILL"),
-      CAPTURE_TIMEOUT_MS,
-    );
-    const abort = () => stopPack(child, "SIGTERM");
+    // Signalling a group is by pid, and `exit` is where Node reaps it, so
+    // nothing is sent afterwards: the pid is the system's to hand out again.
+    let reaped = false;
+    child.once("exit", () => {
+      reaped = true;
+    });
+    const stop = (sig: NodeJS.Signals) => {
+      if (!reaped) stopPack(child, sig);
+    };
+    const timer = setTimeout(() => stop("SIGKILL"), CAPTURE_TIMEOUT_MS);
+    const abort = () => stop("SIGTERM");
     signal?.addEventListener("abort", abort, { once: true });
     const done = () => {
       clearTimeout(timer);

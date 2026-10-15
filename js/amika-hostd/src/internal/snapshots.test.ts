@@ -249,6 +249,23 @@ describe("startCapture", () => {
     expect(store.get("org/sandbox/b")).toMatchObject({ state: "active" });
   });
 
+  it("records a staging directory it could not make", async () => {
+    const { deps, store } = harness();
+    // Otherwise the snapshot sits at `capturing` until a restart sweeps it,
+    // and the control plane polls a capture that is not running.
+    vi.spyOn(store, "staging").mockImplementation(() => {
+      throw new Error("EACCES: permission denied, mkdir '/var/lib/snapshots'");
+    });
+
+    await (
+      await startCapture({ rig: "rig-1", name: "org/sandbox/a" }, deps)
+    ).done;
+    expect(store.get("org/sandbox/a")).toMatchObject({
+      state: "failed",
+      errorReason: expect.stringContaining("EACCES"),
+    });
+  });
+
   it("survives a failure it cannot even record", async () => {
     const { deps, store, err } = harness(fakePack({ code: 1 }));
     // A pack that fills the disk fails the index write that records it, and
