@@ -1020,8 +1020,10 @@ describe("snapshots", () => {
       pack: fakePack({ code: 1 }),
     });
     const { snapshot } = await captured(h);
+    // Reported as the terminal `error` the control plane settles on, not
+    // hostd's own `failed`, which it would read as still in progress.
     expect(await h.provider.snapshots!.get(NAME)).toMatchObject({
-      state: "failed",
+      state: "error",
     });
     await expect(snapshot.waitForActive()).rejects.toThrow(
       /failed on its host/,

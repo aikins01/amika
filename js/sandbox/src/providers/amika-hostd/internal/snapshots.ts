@@ -186,7 +186,9 @@ function toProviderSnapshot(
     ...snapshot,
     name: snapshot.name,
     providerSnapshotId: null,
-    state: snapshot.state,
+    // `error` is the terminal failure every provider reports and the control
+    // plane settles a capture on; hostd's own word for it is `failed`.
+    state: snapshot.state === "failed" ? "error" : snapshot.state,
     ...(snapshot.image === undefined ? {} : { imageName: snapshot.image }),
     ...(snapshot.errorReason === undefined
       ? {}
