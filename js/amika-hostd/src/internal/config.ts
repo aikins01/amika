@@ -331,7 +331,7 @@ function parseHostname(value: string | undefined): string | undefined {
 
 /**
  * Where snapshot artifacts are kept. Absolute, so the directory a snapshot
- * lands in never depends on the daemon's working directory — `up` starts the
+ * lands in never depends on the daemon's working directory: `up` starts the
  * daemon detached, and a relative path would name a different place
  * depending on where the operator ran it from.
  */

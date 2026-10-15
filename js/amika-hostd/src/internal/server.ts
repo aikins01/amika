@@ -45,25 +45,6 @@ export interface SnapshotOptions {
   signal?: AbortSignal;
 }
 
-/**
- * Bind the store and the capture together for the app, or nothing when this
- * daemon cannot pack (no smolvm of its own).
- */
-function snapshotSupport(
-  runtime: MachineRuntime,
-  options: SnapshotOptions | undefined,
-) {
-  if (!options) return undefined;
-  const { directory, indexFile, ...capture } = options;
-  const store = openSnapshotStore({ directory, indexFile });
-  return {
-    store,
-    capture: async (rig: string, name: string) => {
-      await startCapture({ rig, name }, { runtime, store, ...capture });
-    },
-  };
-}
-
 /** Resolve once the port is bound, or reject if it cannot be (e.g. in use). */
 export function startServer(
   config: HostdConfigWith<"secretKey">,
@@ -144,4 +125,23 @@ export function startServer(
       });
     });
   });
+}
+
+/**
+ * Bind the store and the capture together for the app, or nothing when this
+ * daemon cannot pack (no smolvm of its own).
+ */
+function snapshotSupport(
+  runtime: MachineRuntime,
+  options: SnapshotOptions | undefined,
+) {
+  if (!options) return undefined;
+  const { directory, indexFile, ...capture } = options;
+  const store = openSnapshotStore({ directory, indexFile });
+  return {
+    store,
+    capture: async (rig: string, name: string) => {
+      await startCapture({ rig, name }, { runtime, store, ...capture });
+    },
+  };
 }

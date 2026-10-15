@@ -3,6 +3,7 @@
  * runtime: this provider, then hostd's app, then the `smol` provider hostd
  * runs machines through, then a fake `smolvm serve`.
  */
+import type { ChildProcess } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -188,9 +189,7 @@ function fakePack({ code = 0, manual = false } = {}) {
   const packed: string[] = [];
   const finish: (() => void)[] = [];
   const spawn = ((_command: string, args: readonly string[]) => {
-    const child = new EventEmitter() as never as ReturnType<
-      typeof import("node:child_process").spawn
-    >;
+    const child = new EventEmitter() as never as ChildProcess;
     Object.assign(child, { stdout: null, stderr: null, kill: vi.fn() });
     const done = () => {
       const stub = args[args.indexOf("-o") + 1];

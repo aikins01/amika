@@ -502,11 +502,13 @@ that needs a fixed version pins the release's 12-character commit SHA instead.
 smolvm's image cache (below) is keyed by the digest a reference points to, so
 a moved tag is pulled again rather than served stale.
 
-On create (`POST /v0beta1/rigs`), `resolveImage` (`src/internal/requests.ts`) swaps
-a configured name for its reference before forwarding to smolvm. An `image`
-containing `/` or `:` is taken as a full reference and forwarded unchanged,
-for development. Any other name is refused with a `400` naming the config file
-to edit, so an unconfigured preset never falls through to a Docker Hub pull.
+On create (`POST /v0beta1/rigs`), `resolveSource` (`src/internal/requests.ts`)
+swaps a configured name for its reference before forwarding to smolvm. A name
+this host holds as a snapshot is resolved to that artifact instead (see
+[Snapshots](#snapshots)). Failing both, an `image` containing `/` or `:` is
+taken as a full reference and forwarded unchanged, for development. Any other
+name is refused with a `400` naming the config file to edit, so an
+unconfigured preset never falls through to a Docker Hub pull.
 smolvm pulls the reference inside the VM on first use, which needs the
 machine's network on (the default).
 
@@ -768,7 +770,9 @@ hardware never leave it, and neither do their snapshots.
 POST   /v0beta1/rigs/<rig>/snapshots   {"name": "<org>/sandbox/<label>"} -> 202
 GET    /v0beta1/snapshots                     every snapshot this host holds
 GET    /v0beta1/snapshots/<name>              one, or 404
-DELETE /v0beta1/snapshots/<name>              204, idempotent
+DELETE /v0beta1/snapshots/<name>              204; 409 while it is being
+                                              taken or while a rig from it
+                                              is still here
 ```
 
 `src/internal/snapshots.ts` takes one: stop the rig, run `smolvm pack create
@@ -783,12 +787,16 @@ stub. `src/internal/snapshot-store.ts` keeps them.
   processes still hold; and a checkpoint restores only onto its captured
   CPU/memory/disk topology, while a snapshot is a base image new rigs of any
   size boot from. A pack carries disks only, as a flattened tar of the
-  container's layers for an image-based machine — so a scrubbed file is
+  container's layers for an image-based machine, so a scrubbed file is
   absent from the artifact rather than merely unlinked from a block image.
 - **Why hostd owns the stop.** `pack create --from-vm` refuses a running
   machine and smolvm has no one call that stops and packs, so the daemon does
-  both under a per-rig lock, as smolvm's own export handler holds its
-  lifecycle lock across the stopped-check and the pack.
+  both itself, under a lock that holds the stop and the pack together for one
+  rig. That lock serializes captures and nothing else: the pack is a separate
+  process, so smolvm's own lifecycle lock is not held across it, and hostd's
+  `start`, `stop`, `delete`, `exec` and file routes reach the runtime during
+  a pack without taking it. A rig started or deleted mid-pack is therefore
+  smolvm's to refuse, not hostd's.
 - **Why it is a subprocess.** The HTTP API's only export pushes to an OCI
   registry; a local artifact comes from the CLI. It runs the binary the
   daemon's own smolvm runs (`ManagedSmolvm.binary`), so both read the same
@@ -806,7 +814,7 @@ stub. `src/internal/snapshot-store.ts` keeps them.
   `exec` (so the rig is still running), then this stops it. The agent is
   alive for both, and a graceful stop flushes the guest, so a file the scrub
   removed can be written back before the pack reads the disks. Every provider
-  Amika supports has this window — none kills the agent before capturing —
+  Amika supports has this window (none kills the agent before capturing),
   but it is wider here, because stopping a VM runs the guest's shutdown
   rather than freezing it.
 - **Names are never paths.** Amika's snapshot names are namespaced
@@ -814,7 +822,7 @@ stub. `src/internal/snapshot-store.ts` keeps them.
   filename is a slug plus a digest of the whole name, so no part of a name
   reaches the filesystem and two names that slugify alike keep their own
   files. The routes take the name as a trailing wildcard, decoded once.
-- **Resolving one at create.** `resolveImage`'s successor `resolveSource`
+- **Resolving one at create.** `resolveSource`
   (`src/internal/requests.ts`) checks `[preset_images]`, then this store,
   then the full-OCI-reference passthrough. The store has to come first,
   because a snapshot name contains slashes and would otherwise be forwarded
@@ -823,10 +831,12 @@ stub. `src/internal/snapshot-store.ts` keeps them.
   from an artifact reads that artifact's layers again, so a delete is refused
   (`409`) while any rig created from it is still on the host. `snapshots.json`
   records which rig came from which snapshot.
-- **What an interrupted run leaves.** A capture cannot outlive the daemon
-  that spawned it, so on startup the store turns every `capturing` entry into
-  `failed`, drops entries whose artifact has gone missing, and clears
-  staging.
+- **What an interrupted run leaves.** A capture is abandoned when the daemon
+  stops: nothing is left that could adopt an artifact, so on startup the store
+  turns every `capturing` entry into `failed`, drops entries whose artifact has
+  gone missing, and clears staging. The pack is signalled on a graceful
+  shutdown, but it runs in its own process group, so one that outlives a
+  `kill -9` keeps writing into a staging directory the next start removes.
 
 ## API versions
 

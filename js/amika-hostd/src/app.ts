@@ -168,12 +168,28 @@ export function createApp(
       return c.json({ error: "Invalid request" }, 400);
     }
     // Snapshot refusals carry no command, environment value, or file
-    // contents — only the name the caller already sent.
+    // contents, only the name the caller already sent.
     if (error instanceof SnapshotNameError) {
       return c.json({ error: error.message }, 400);
     }
     if (error instanceof SnapshotConflictError) {
       return c.json({ error: error.message }, 409);
+    }
+    // A runtime failure from outside `call` (a capture resolves its rig
+    // before the route can wrap it), shaped as `call` shapes one: the
+    // runtime's own status, and smolvm's reason only when it vouched it
+    // safe. Without this a capture of a rig that is not there would look
+    // like a broken host rather than a `404`.
+    if (error instanceof RuntimeError) {
+      return Response.json(
+        {
+          error:
+            error.reason === undefined
+              ? "Smol runtime request failed"
+              : `Smol runtime request failed: ${error.reason}`,
+        },
+        { status: error.status },
+      );
     }
     // Do not return commands, environment values, or upstream error bodies.
     return c.json({ error: "Internal server error" }, 500);
@@ -458,11 +474,14 @@ const SNAPSHOTS_ROUTE = `/${API_VERSION}/snapshots`;
 /** Named in `/health` by a daemon that can take snapshots. */
 export const SNAPSHOTS_FEATURE = "snapshots";
 
+/** The Smol-compatible machine API, served until no control plane needs it. */
+const LEGACY_MACHINES_ROUTE = "/api/v1/machines";
+
 /**
  * The snapshot a `/v0beta1/snapshots/...` path names: everything after the
  * collection, decoded once. A wildcard rather than a route parameter because
  * Amika's snapshot names are namespaced and so contain slashes, which a
- * parameter would not match — and which a caller may also send
+ * parameter would not match, and which a caller may also send
  * percent-encoded.
  */
 function snapshotName(requestPath: string): string {
@@ -475,9 +494,6 @@ function snapshotName(requestPath: string): string {
   }
   return validSnapshotName(decoded);
 }
-
-/** The Smol-compatible machine API, served until no control plane needs it. */
-const LEGACY_MACHINES_ROUTE = "/api/v1/machines";
 
 /**
  * Forward a request the gateway claims to the service it names, as the

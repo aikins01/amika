@@ -34,14 +34,26 @@ const MACHINE: MachineInfo = {
 /**
  * A `smolvm pack create` that writes the artifact the real one would and
  * exits with `code`. `writes: false` stands in for a pack that died before
- * producing anything.
+ * producing anything; `manual` holds it open until `release()`, so a test
+ * can act while it runs.
  */
 function fakePack({
   code = 0,
   output = "",
   writes = true,
-}: { code?: number; output?: string; writes?: boolean } = {}) {
+  manual = false,
+  pid,
+}: {
+  code?: number;
+  output?: string;
+  writes?: boolean;
+  manual?: boolean;
+  pid?: number;
+} = {}) {
   const calls: { command: string; args: readonly string[] }[] = [];
+  const finish: (() => void)[] = [];
+  let started: () => void;
+  const spawned = new Promise<void>((resolve) => (started = resolve));
   const spawn: Spawn = (command, args) => {
     calls.push({ command, args });
     const child = new EventEmitter() as ReturnType<Spawn>;
@@ -49,18 +61,27 @@ function fakePack({
       stdout: null,
       stderr: Object.assign(new EventEmitter(), {}),
       kill: vi.fn(),
+      ...(pid === undefined ? {} : { pid }),
     });
-    queueMicrotask(() => {
+    const done = () => {
       if (output) child.stderr?.emit("data", output);
       if (writes && code === 0) {
         const stub = args[args.indexOf("-o") + 1];
         writeFileSync(`${stub}.smolmachine`, "packed bytes");
       }
       child.emit("close", code, null);
-    });
+    };
+    if (manual) finish.push(done);
+    else queueMicrotask(done);
+    started();
     return child;
   };
-  return { spawn, calls };
+  return {
+    spawn,
+    calls,
+    spawned,
+    release: () => finish.splice(0).forEach((done) => done()),
+  };
 }
 
 function harness(pack = fakePack()) {
@@ -226,6 +247,51 @@ describe("startCapture", () => {
     expect(peak).toBe(1);
     expect(store.get("org/sandbox/a")).toMatchObject({ state: "active" });
     expect(store.get("org/sandbox/b")).toMatchObject({ state: "active" });
+  });
+
+  it("survives a failure it cannot even record", async () => {
+    const { deps, store, err } = harness(fakePack({ code: 1 }));
+    // A pack that fills the disk fails the index write that records it, and
+    // nothing awaits a capture: a rejection here would be an unhandled one,
+    // which ends the daemon.
+    vi.spyOn(store, "fail").mockImplementation(() => {
+      throw new Error("ENOSPC: no space left on device");
+    });
+
+    await expect(
+      (await startCapture({ rig: "rig-1", name: "org/sandbox/a" }, deps)).done,
+    ).resolves.toBeUndefined();
+    expect(err).toHaveBeenCalledWith(
+      expect.stringContaining("and so did recording it"),
+    );
+  });
+
+  it("signals the pack's whole process group, not just its leader", async () => {
+    // A pack boots a helper VM to read the rig's disks. Killing the leader
+    // alone leaves that helper holding them and holding the pipe `close`
+    // waits on, so the capture would never settle.
+    const killed: number[] = [];
+    const kill = vi.spyOn(process, "kill").mockImplementation((pid: number) => {
+      killed.push(pid);
+      return true;
+    });
+    try {
+      const abort = new AbortController();
+      const pack = fakePack({ manual: true, pid: 4242 });
+      const { deps } = harness(pack);
+      deps.signal = abort.signal;
+      const { done } = await startCapture(
+        { rig: "rig-1", name: "org/sandbox/a" },
+        deps,
+      );
+      await pack.spawned;
+      abort.abort();
+      expect(killed).toEqual([-4242]);
+      pack.release();
+      await done;
+    } finally {
+      kill.mockRestore();
+    }
   });
 
   it("never hands the pack the daemon's keys", async () => {

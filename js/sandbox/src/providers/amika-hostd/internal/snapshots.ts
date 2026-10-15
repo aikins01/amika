@@ -64,9 +64,10 @@ export interface HostdSnapshotDeps {
  * How long to wait for a capture to land before giving up on it. The control
  * plane treats a snapshot row untouched for 30 minutes as abandoned, so this
  * stays under that: a wait that outlived it would report success on a row
- * already reclaimed. A pack slower than this leaves hostd with an `active`
- * snapshot the control plane has recorded as failed — legible rather than
- * silent, since the name then refuses to be reused until it is deleted.
+ * already reclaimed. A pack slower than this parks the control plane's row in
+ * `finalizing` (not `failed`) with the source rig kept, so a later read
+ * reconciles it to `active` once the artifact lands; the name is not reusable
+ * in the meantime.
  */
 const ACTIVE_TIMEOUT_MS = 20 * 60 * 1000;
 

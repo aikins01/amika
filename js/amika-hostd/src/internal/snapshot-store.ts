@@ -16,7 +16,14 @@
  * index is the only thing that maps a name to its file.
  */
 import { createHash } from "node:crypto";
-import { mkdirSync, readFileSync, renameSync, rmSync, statSync } from "node:fs";
+import {
+  chmodSync,
+  mkdirSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  statSync,
+} from "node:fs";
 import path from "node:path";
 import { z } from "zod";
 import { writePrivateFile } from "./private-file.js";
@@ -103,7 +110,7 @@ export interface SnapshotStore {
 }
 
 export interface SnapshotStoreOptions {
-  /** Holds the artifacts; created owner-only when missing. */
+  /** Holds the artifacts; made owner-only, created when missing. */
   directory: string;
   /** The index, `snapshots.json`, normally beside the daemon's other state. */
   indexFile: string;
@@ -119,6 +126,7 @@ export function openSnapshotStore({
   directory,
   indexFile,
 }: SnapshotStoreOptions): SnapshotStore {
+  ensurePrivate(directory);
   const index = readIndex(indexFile);
   const save = () => writeIndex(indexFile, index);
   let swept = false;
@@ -131,7 +139,10 @@ export function openSnapshotStore({
         updatedAt: new Date().toISOString(),
       });
       swept = true;
-    } else if (entry.state === "active" && !fileSize(artifactPath(entry))) {
+    } else if (
+      entry.state === "active" &&
+      fileSize(artifactPath(entry)) === undefined
+    ) {
       index.snapshots.delete(name);
       swept = true;
     }
@@ -369,7 +380,7 @@ function artifactPath(entry: SnapshotEntry): string {
 /**
  * The filename an artifact takes: a readable slug of the name so an operator
  * browsing the directory can tell them apart, plus a digest of the whole
- * name so two names that slugify alike never collide — and so no part of the
+ * name so two names that slugify alike never collide, and so no part of the
  * name ever reaches the filesystem verbatim.
  */
 function artifactFileName(name: string): string {
@@ -390,11 +401,29 @@ function stagingRoot(directory: string): string {
 
 /**
  * Move a staged artifact into place. A rename within the directory is atomic;
- * a copy would leave a half-written artifact readable as a snapshot.
+ * a copy would leave a half-written artifact readable as a snapshot. The mode
+ * is set first, while the file is still private to staging: an artifact is a
+ * whole image of a rig's disks, and the pack wrote it under smolvm's umask.
  */
 function adopt(staged: string, destination: string): void {
+  chmodSync(staged, 0o600);
   rmSync(destination, { force: true });
   renameSync(staged, destination);
+}
+
+/**
+ * The artifact directory, owner-only. `mkdirSync`'s `mode` applies only to
+ * directories it creates, and `snapshot_dir` may name one an operator made
+ * themselves. A failure is left to the first capture to report, since a
+ * daemon that cannot pack still serves every other route.
+ */
+function ensurePrivate(directory: string): void {
+  try {
+    mkdirSync(directory, { recursive: true, mode: 0o700 });
+    chmodSync(directory, 0o700);
+  } catch {
+    // Reported by the capture that cannot stage into it.
+  }
 }
 
 function removeArtifact(entry: SnapshotEntry): void {

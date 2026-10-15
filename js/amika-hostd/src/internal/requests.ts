@@ -2,6 +2,7 @@
 import { z } from "zod";
 import { HTTPException } from "hono/http-exception";
 import { PREPULL_MACHINE_PREFIX } from "./prepull.js";
+import type { SnapshotState } from "./snapshot-store.js";
 
 const nameSchema = z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9_-]*$/);
 const envSchema = z.array(
@@ -69,7 +70,7 @@ export type MachineSource =
 
 /** What `resolveSource` needs of the snapshot store, and nothing more. */
 export interface SnapshotSource {
-  get(name: string): { state: string } | undefined;
+  get(name: string): { state: SnapshotState } | undefined;
   artifact(name: string): string | undefined;
 }
 

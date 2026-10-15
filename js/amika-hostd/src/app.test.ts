@@ -6,6 +6,7 @@ import {
 import { describe, expect, it, vi } from "vitest";
 import { createApp } from "./app.js";
 import { memoryServiceRegistry } from "./internal/service-registry.js";
+import { SnapshotConflictError } from "./internal/snapshot-store.js";
 import {
   RuntimeError,
   type CreateMachine,
@@ -1532,9 +1533,11 @@ describe("service-link routes", () => {
 describe("snapshots", () => {
   const RIGS = "/v0beta1/rigs";
   const SNAPSHOTS = "/v0beta1/snapshots";
+  /**
+   * Amika's names are namespaced, so the name is also its own URL path: the
+   * client escapes per segment and the separators stay separators.
+   */
   const NAME = "org_abc123/sandbox/nightly";
-  /** The name as it travels in a URL: escaped per segment, slashes kept. */
-  const PATH = "org_abc123/sandbox/nightly";
 
   /** An in-memory stand-in for the on-disk store (`snapshot-store.ts`). */
   function fakeStore() {
@@ -1599,8 +1602,6 @@ describe("snapshots", () => {
 
   it("reports a name already taken as a conflict", async () => {
     const { app, capture } = withSnapshots();
-    const { SnapshotConflictError } =
-      await import("./internal/snapshot-store.js");
     capture.mockRejectedValue(new SnapshotConflictError("already exists"));
     const response = await app.request(
       `${RIGS}/demo/snapshots`,
@@ -1610,6 +1611,19 @@ describe("snapshots", () => {
     expect(await response.json()).toEqual({ error: "already exists" });
   });
 
+  it("reports a capture of a rig that is not there as the runtime does", async () => {
+    const { app, capture } = withSnapshots();
+    // `startCapture` resolves the rig before taking the name so an unknown
+    // one is a 404; the route awaits it outside `call`, so `onError` has to
+    // shape a runtime failure the same way.
+    capture.mockRejectedValue(new RuntimeError(404, "no such machine"));
+    const response = await app.request(
+      `${RIGS}/ghost/snapshots`,
+      json({ name: NAME }),
+    );
+    expect(response.status).toBe(404);
+  });
+
   it("lists and reads snapshots by their slash-separated names", async () => {
     const { app, store } = withSnapshots();
     store.snapshots.set(NAME, { name: NAME, state: "active" });
@@ -1617,7 +1631,7 @@ describe("snapshots", () => {
     expect(await (await app.request(SNAPSHOTS)).json()).toEqual({
       snapshots: [{ name: NAME, state: "active" }],
     });
-    const one = await app.request(`${SNAPSHOTS}/${PATH}`);
+    const one = await app.request(`${SNAPSHOTS}/${NAME}`);
     expect(one.status).toBe(200);
     expect(await one.json()).toEqual({ name: NAME, state: "active" });
     expect(
@@ -1643,7 +1657,7 @@ describe("snapshots", () => {
 
   it("never sees a dot segment, encoded or not", async () => {
     const { app } = withSnapshots();
-    // The URL parser collapses `..` before routing — percent-encoded too —
+    // The URL parser collapses `..` before routing (percent-encoded too),
     // so traversal never reaches the handler. The name check and the
     // derived artifact filename are the layers behind that, not instead of it.
     for (const traversal of ["org/../etc/passwd", "org/%2E%2E/etc/passwd"]) {
@@ -1656,19 +1670,19 @@ describe("snapshots", () => {
     store.snapshots.set(NAME, { name: NAME, state: "active" });
 
     expect(
-      (await app.request(`${SNAPSHOTS}/${PATH}`, { method: "DELETE" })).status,
+      (await app.request(`${SNAPSHOTS}/${NAME}`, { method: "DELETE" })).status,
     ).toBe(204);
     expect(store.snapshots.has(NAME)).toBe(false);
     // Deleting what is not there is done, as for every other resource.
     expect(
-      (await app.request(`${SNAPSHOTS}/${PATH}`, { method: "DELETE" })).status,
+      (await app.request(`${SNAPSHOTS}/${NAME}`, { method: "DELETE" })).status,
     ).toBe(204);
   });
 
   it("refuses to delete one still being taken", async () => {
     const { app, store } = withSnapshots();
     store.snapshots.set(NAME, { name: NAME, state: "capturing" });
-    const response = await app.request(`${SNAPSHOTS}/${PATH}`, {
+    const response = await app.request(`${SNAPSHOTS}/${NAME}`, {
       method: "DELETE",
     });
     expect(response.status).toBe(409);
@@ -1684,7 +1698,7 @@ describe("snapshots", () => {
     store.snapshots.set(NAME, { name: NAME, state: "active" });
     store.sources.set("child", NAME);
 
-    const response = await app.request(`${SNAPSHOTS}/${PATH}`, {
+    const response = await app.request(`${SNAPSHOTS}/${NAME}`, {
       method: "DELETE",
     });
     expect(response.status).toBe(409);
@@ -1695,7 +1709,7 @@ describe("snapshots", () => {
     // Once the rig is gone the snapshot is free again.
     runtime.list.mockResolvedValue([]);
     expect(
-      (await app.request(`${SNAPSHOTS}/${PATH}`, { method: "DELETE" })).status,
+      (await app.request(`${SNAPSHOTS}/${NAME}`, { method: "DELETE" })).status,
     ).toBe(204);
   });
 
@@ -1716,7 +1730,7 @@ describe("snapshots", () => {
         name: "child",
         from: `/var/lib/snapshots/${NAME}.smolmachine`,
       });
-      // smolvm refuses `from` and `image` together, so only one is sent —
+      // smolvm refuses `from` and `image` together, so only one is sent,
       // and the snapshot's name is not part of a create at all.
       expect(created).not.toHaveProperty("image");
       expect(created).not.toHaveProperty("snapshot");

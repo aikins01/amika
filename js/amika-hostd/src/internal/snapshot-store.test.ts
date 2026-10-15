@@ -1,10 +1,12 @@
 /** The on-disk snapshot store: naming, state, and what survives a restart. */
 import {
+  chmodSync,
   existsSync,
   mkdtempSync,
   readdirSync,
   readFileSync,
   rmSync,
+  statSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -105,6 +107,25 @@ describe("taking a snapshot", () => {
         /^org_abc123-sandbox-nightly-build-[0-9a-f]{12}\.smolmachine$/,
       ),
     ]);
+  });
+
+  it("keeps the artifact owner-only, whatever the pack wrote", () => {
+    const { store, root, reopen } = open();
+    const directory = path.join(root, "snapshots");
+    const mode = (file: string) => statSync(file).mode & 0o777;
+    // An operator can point `snapshot_dir` at a directory they made
+    // themselves, where `mkdirSync`'s mode never applies, and the pack
+    // writes its artifact under smolvm's umask. An artifact is a whole image
+    // of a rig's disks, so neither of those decides who may read it.
+    chmodSync(directory, 0o755);
+    store.reserve({ name: "org/sandbox/a", sourceRig: "r" });
+    const staged = stagePack(store);
+    chmodSync(staged, 0o644);
+    store.activate("org/sandbox/a", staged);
+    expect(mode(store.artifact("org/sandbox/a") as string)).toBe(0o600);
+
+    reopen();
+    expect(mode(directory)).toBe(0o700);
   });
 
   it("gives names that slugify alike their own artifacts", () => {
