@@ -49,6 +49,13 @@ export const SESSION_TTL_S = 24 * 60 * 60;
 /** How far apart Amika's and hostd's clocks may be. */
 const CLOCK_SKEW_S = 5 * 60;
 
+/**
+ * The longest a pass may go on verifying after hostd first sees it: its own
+ * life, plus the skew in each direction (`verifyLoginPass`). A record that
+ * a pass was used must outlast this.
+ */
+export const LOGIN_PASS_REPLAY_WINDOW_S = LOGIN_PASS_TTL_S + 2 * CLOCK_SKEW_S;
+
 const PASS_KEY_LABEL = "amika-hostd login passes v1";
 const SESSION_KEY_LABEL = "amika-hostd sessions v1";
 

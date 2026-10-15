@@ -104,12 +104,12 @@ describe("createUpgradeHandler", () => {
   });
 
   /** A guest that records the handshake, accepts it, then echoes. */
-  async function guest() {
+  async function guest(answer = "HTTP/1.1 101 Switching Protocols\r\n\r\n") {
     let handshake = "";
     const server = createServer((socket) => {
       socket.once("data", (chunk) => {
         handshake = chunk.toString();
-        socket.write("HTTP/1.1 101 Switching Protocols\r\n\r\n");
+        socket.write(answer);
         socket.pipe(socket);
       });
     });
@@ -207,6 +207,39 @@ describe("createUpgradeHandler", () => {
     expect(await read(socket)).toBe("ssh bytes");
     socket.destroy();
     await vi.waitFor(() => expect(tunnels.size).toBe(0));
+  });
+
+  it("keeps the guest's answer from setting the gateway's cookies", async () => {
+    const target = await guest(
+      "HTTP/1.1 101 Switching Protocols\r\nSet-Cookie: theme=dark\r\n" +
+        "Set-Cookie: __Host-amika-session=forged; Path=/\r\n\r\nfirst frame",
+    );
+    const { port } = await hostd(target.port);
+    const socket = await open(port, validPath());
+    let answer = "";
+    socket.on("data", (chunk) => (answer += chunk));
+    await vi.waitFor(() =>
+      expect(answer).toBe(
+        "HTTP/1.1 101 Switching Protocols\r\nSet-Cookie: theme=dark\r\n\r\nfirst frame",
+      ),
+    );
+    socket.write("more bytes");
+    await vi.waitFor(() => expect(answer).toMatch(/more bytes$/));
+  });
+
+  it.each([
+    ["never finishes", ""],
+    ["finishes too late", "\r\n\r\n"],
+  ])("ends a tunnel whose guest's answer %s", async (_label, end) => {
+    const target = await guest(
+      `HTTP/1.1 101 Switching Protocols\r\nX-Pad: ${"a".repeat(70_000)}${end}`,
+    );
+    const { port } = await hostd(target.port);
+    const socket = await open(port, validPath());
+    let answer = "";
+    socket.on("data", (chunk) => (answer += chunk));
+    await once(socket, "close");
+    expect(answer).toBe("");
   });
 
   it.each([

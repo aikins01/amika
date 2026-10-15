@@ -22,10 +22,13 @@ export {
 } from "./keys";
 export {
   LINK_COOKIE,
+  LOGIN_STATE_COOKIE,
+  SESSION_COOKIE,
+  carriesGatewayCookie,
   isLoopbackHost,
   linkCookie,
   linkFromCookie,
-  withoutLinkCookie,
+  withoutGatewayCookies,
   type LinkCookieClaim,
 } from "./link-cookie";
 export { hardenServiceLinkResponse, tokenHint } from "./responses";
@@ -39,3 +42,4 @@ export {
   type ServiceLinkRoute,
   type ServiceRoute,
 } from "./routes";
+export { browserOrigin } from "./browser-login";

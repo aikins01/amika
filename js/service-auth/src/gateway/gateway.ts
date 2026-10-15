@@ -14,9 +14,15 @@
  * - Any path outside the server's own (`isOwnPath`) with the link cookie a
  *   link set (`./link-cookie.ts`): a page's root-relative URLs.
  *
+ * With `amikaUrl`, the gateway also logs browsers in through Amika
+ * (`./browser-login.ts`), on two endpoints the server mounts: `startLogin`
+ * and `finishLogin`. The session it sets opens previews, which come next.
+ *
  * Every credential is the gateway's: the server forwards none of them
- * (`isCredentialHeader`, `guestCookies`), and responses on a link are
- * hardened (`harden`), since their URL is a credential.
+ * (`isCredentialHeader`, `guestCookies`), it drops a guest's `Set-Cookie`
+ * for any of the gateway's cookies (`finish`, `finishUpgrade`), and
+ * responses on a link are hardened (`harden`), since their URL is a
+ * credential.
  */
 import {
   SERVICE_KEY_HEADER,
@@ -26,11 +32,19 @@ import {
   authorizeServiceRouteRequest,
 } from "./keys";
 import {
-  LINK_COOKIE,
+  carriesGatewayCookie,
   linkCookie,
   linkFromCookie,
-  withoutLinkCookie,
+  setsGatewayCookie,
+  withoutGatewayCookies,
 } from "./link-cookie";
+import {
+  CALLBACK_PATH,
+  LOGIN_PATH,
+  finishLogin,
+  startLogin,
+  usedLoginStates,
+} from "./browser-login";
 import { hardenServiceLinkResponse, tokenHint } from "./responses";
 import {
   isAmikadSshUpgrade,
@@ -48,6 +62,11 @@ export interface GatewayOptions {
    * every service and link route, its health check.
    */
   isOwnPath: (pathname: string) => boolean;
+  /**
+   * Amika's URL, where a browser is sent to log in. Without it the gateway
+   * logs no browser in, and serves no previews.
+   */
+  amikaUrl?: string;
 }
 
 /**
@@ -87,7 +106,13 @@ export type GatewayDecision =
 
 export type Gateway = ReturnType<typeof createGateway>;
 
-export function createGateway({ secretKey, isOwnPath }: GatewayOptions) {
+export function createGateway({
+  secretKey,
+  isOwnPath,
+  amikaUrl,
+}: GatewayOptions) {
+  const previews = amikaUrl !== undefined;
+  const loginStates = usedLoginStates();
   const cookieClaim = ({ url, headers }: GatewayRequest) =>
     isOwnPath(url.pathname)
       ? null
@@ -103,7 +128,8 @@ export function createGateway({ secretKey, isOwnPath }: GatewayOptions) {
       return Boolean(
         parseServicePath(pathname) ||
         parseServiceLinkPath(pathname) ||
-        cookieClaim(request),
+        cookieClaim(request) ||
+        (previews && (pathname === LOGIN_PATH || pathname === CALLBACK_PATH)),
       );
     },
 
@@ -208,12 +234,77 @@ export function createGateway({ secretKey, isOwnPath }: GatewayOptions) {
 
     harden,
 
-    /** A forwarded service's response, with the decision's cookie. */
+    /**
+     * A forwarded service's response, without any cookie of ours the guest
+     * tried to set, and with the decision's.
+     */
     finish(decision: ForwardDecision, response: Response): Response {
+      const headers = response.headers;
+      const guest = headers.getSetCookie();
+      if (guest.some(setsGatewayCookie)) {
+        headers.delete("set-cookie");
+        for (const cookie of guest) {
+          if (!setsGatewayCookie(cookie)) headers.append("set-cookie", cookie);
+        }
+      }
       if (decision.setCookie) {
         response.headers.append("set-cookie", decision.setCookie);
       }
       return harden(decision, response);
+    },
+
+    /**
+     * `finish` for an upgrade, which the server tunnels as bytes: the
+     * guest's raw answer to the handshake (its status line and header
+     * lines, without the blank line that ends them), less any cookie of
+     * ours it tries to set. A folded header line goes with the one it
+     * continues.
+     */
+    finishUpgrade(head: string): string {
+      const fields: string[][] = [];
+      for (const line of head.split("\r\n")) {
+        const last = fields.at(-1);
+        if (last && fields.length > 1 && /^[ \t]/.test(line)) last.push(line);
+        else fields.push([line]);
+      }
+      return fields
+        .filter(([first, ...folded], i) => {
+          if (i === 0) return true; // The status line.
+          const colon = first.indexOf(":");
+          if (
+            colon < 0 ||
+            first.slice(0, colon).trim().toLowerCase() !== "set-cookie"
+          ) {
+            return true;
+          }
+          const value = [first.slice(colon + 1), ...folded].join(" ");
+          return !setsGatewayCookie(value);
+        })
+        .flat()
+        .join("\r\n");
+    },
+
+    /**
+     * Whether this gateway logs browsers in, for the previews their session
+     * opens.
+     */
+    servesPreviews: previews,
+
+    /**
+     * `GET /__amika/login`: send the browser to Amika's authorize page for
+     * this host. Only with `amikaUrl`.
+     */
+    startLogin(request: Request): Response {
+      if (amikaUrl === undefined) throw new Error("No previews to log in to");
+      return startLogin(request, amikaUrl);
+    },
+
+    /**
+     * `POST /__amika/callback`: check the pass Amika posted and set the
+     * session.
+     */
+    finishLogin(request: Request): Promise<Response> {
+      return finishLogin(request, secretKey, loginStates);
     },
 
     /** Whether a request header (lowercased) is a credential of ours. */
@@ -223,12 +314,12 @@ export function createGateway({ secretKey, isOwnPath }: GatewayOptions) {
 
     /** Whether a `Cookie` header may carry a cookie of ours. */
     carriesCredentialCookie(cookieHeader: string): boolean {
-      return cookieHeader.includes(LINK_COOKIE);
+      return carriesGatewayCookie(cookieHeader);
     },
 
     /** A `Cookie` header without our cookies, or null when nothing is left. */
     guestCookies(cookieHeader: string | null | undefined): string | null {
-      return withoutLinkCookie(cookieHeader);
+      return withoutGatewayCookies(cookieHeader);
     },
 
     /**

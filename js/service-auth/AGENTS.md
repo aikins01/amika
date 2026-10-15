@@ -15,7 +15,7 @@ other.
 
 ## The gateway
 
-`createGateway({ secretKey, isOwnPath })` returns a gateway whose
+`createGateway({ secretKey, isOwnPath, amikaUrl })` returns a gateway whose
 `authorize(request)` answers one of:
 
 - `forward`: the rig, service and guest path to send the request to, any
@@ -24,6 +24,12 @@ other.
   (which the server must pin to amikad's port).
 - `refuse`: the status, and for a `401` a hint; `refusal` renders it.
 - `not-mine`: no service request at all, for the server's own rules.
+
+With `amikaUrl`, the gateway also logs browsers in through Amika
+(`src/gateway/browser-login.ts`), and the server mounts its two endpoints:
+`GET /__amika/login` (`startLogin`) and `POST /__amika/callback`
+(`finishLogin`). `servesPreviews` says whether it does; the session opens
+previews, which come next.
 
 The server does everything else: resolving the rig's port, forwarding the
 request or piping the upgrade, its own API and its own key check. It must not

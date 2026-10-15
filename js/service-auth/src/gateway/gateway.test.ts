@@ -148,6 +148,51 @@ describe("createGateway", () => {
     expect(
       gateway.guestCookies("theme=dark; __Host-amika-service-link=a/b/c"),
     ).toBe("theme=dark");
+    expect(
+      gateway.guestCookies(
+        "a=1; __Host-amika-session=s; __Host-amika-login=l; b=2",
+      ),
+    ).toBe("a=1; b=2");
+  });
+
+  it("keeps a guest from setting the gateway's cookies", async () => {
+    const decision = await gateway.authorize(
+      request("/v0beta1/rigs/demo/services/web/", {
+        "X-Amika-Hostd-Key": SECRET,
+      }),
+    );
+    if (decision.kind !== "forward") throw new Error(decision.kind);
+    const headers = new Headers();
+    headers.append("set-cookie", "theme=dark; Path=/");
+    headers.append("set-cookie", "__Host-amika-session=forged; Path=/");
+    headers.append("set-cookie", "__HOST-AMIKA-login=fixed; Path=/");
+    const response = gateway.finish(decision, new Response(null, { headers }));
+    expect(response.headers.getSetCookie()).toEqual(["theme=dark; Path=/"]);
+  });
+
+  it("keeps a guest's upgrade answer from setting the gateway's cookies", () => {
+    expect(
+      gateway.finishUpgrade(
+        [
+          "HTTP/1.1 101 Switching Protocols",
+          "Upgrade: websocket",
+          "Set-Cookie: theme=dark; Path=/",
+          "set-cookie:__Host-amika-session=forged; Path=/",
+          "SET-COOKIE: __HOST-AMIKA-login=fixed",
+          // Folded: the name only appears once the line is unfolded.
+          "Set-Cookie:",
+          " __Host-amika-service-link=x; Path=/",
+          "Connection: Upgrade",
+        ].join("\r\n"),
+      ),
+    ).toBe(
+      [
+        "HTTP/1.1 101 Switching Protocols",
+        "Upgrade: websocket",
+        "Set-Cookie: theme=dark; Path=/",
+        "Connection: Upgrade",
+      ].join("\r\n"),
+    );
   });
 
   it("hardens every answer on a link, and only there", async () => {

@@ -31,16 +31,20 @@ import type { MachineRuntime } from "./machine-runtime.js";
 /** amikad's guest port, as Amika registers it. */
 export const AMIKAD_PORT = 60999;
 
-/** hostd's gateway: the secret key, and the paths that are hostd's own. */
-export function hostdGateway(secretKey: string): Gateway {
-  return createGateway({ secretKey, isOwnPath: isHostdPath });
+/**
+ * hostd's gateway: the secret key, the paths that are hostd's own, and
+ * Amika's URL, which turns on browser login.
+ */
+export function hostdGateway(secretKey: string, amikaUrl?: string): Gateway {
+  return createGateway({ secretKey, isOwnPath: isHostdPath, amikaUrl });
 }
 
 /**
  * Handle Node's `upgrade` event: pipe a WebSocket (or any other upgrade)
  * handshake and everything after it to the guest port the route names. The
- * guest answers the handshake itself; hostd only moves bytes. Tunnels are
- * tracked so shutdown can end them, since `server.close` does not.
+ * guest answers the handshake itself; hostd only moves bytes, but for any
+ * cookie of the gateway's the answer tries to set. Tunnels are tracked so
+ * shutdown can end them, since `server.close` does not.
  */
 export function createUpgradeHandler(
   secretKey: string,
@@ -93,8 +97,8 @@ export function createUpgradeHandler(
         requestHead(request, `${route.path}${incoming.url.search}`),
       );
       if (head.length) upstream.write(head);
-      upstream.pipe(socket);
       socket.pipe(upstream);
+      relayAnswer(upstream, socket);
     });
     upstream.on("error", () => {
       if (connected) socket.destroy();
@@ -133,7 +137,39 @@ export function createUpgradeHandler(
     }
     return `${lines.join("\r\n")}\r\n\r\n`;
   }
+
+  /**
+   * Pipe the guest's side of the tunnel to the caller, its answer to the
+   * handshake through `finishUpgrade` first: the guest may set a cookie of
+   * its own there, never one of the gateway's. A head that does not end
+   * within `MAX_ANSWER_HEAD` bytes ends the tunnel.
+   */
+  function relayAnswer(upstream: Socket, socket: Duplex): void {
+    let buffered = Buffer.alloc(0);
+    const onData = (chunk: Buffer) => {
+      buffered = Buffer.concat([buffered, chunk]);
+      const end = buffered.indexOf("\r\n\r\n");
+      if ((end < 0 ? buffered.length : end) > MAX_ANSWER_HEAD) {
+        upstream.destroy();
+        return;
+      }
+      if (end < 0) return;
+      upstream.off("data", onData);
+      upstream.pause();
+      const answer = gateway.finishUpgrade(
+        buffered.subarray(0, end).toString("latin1"),
+      );
+      socket.write(
+        Buffer.concat([Buffer.from(answer, "latin1"), buffered.subarray(end)]),
+      );
+      upstream.pipe(socket);
+    };
+    upstream.on("data", onData);
+  }
 }
+
+/** The most of a guest's answer to a handshake hostd holds to read. */
+const MAX_ANSWER_HEAD = 64 * 1024;
 
 /** An upgrade as the gateway reads it; only its path and query are used. */
 function fromIncomingMessage(request: IncomingMessage): GatewayRequest {

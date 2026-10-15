@@ -693,6 +693,43 @@ service with its whole path as the guest path, HTTP and WebSocket upgrades
   `PUT /v0beta1/rigs/<name>/services` replaces the map later (the
   provider's `syncRoutes`), on ports published at create.
 
+### Browser login
+
+With Amika's URL configured (`api_url`, which hostd always has), hostd logs
+browsers in through Amika (KAPRO-1038), for previews to come: an address
+with no credential in it, opened with a session cookie instead
+(`@amika/service-auth/gateway`; the credentials are in
+`@amika/service-auth/credentials`):
+
+1. `/__amika/login?return=<path>` keeps a random state and the path in
+   `__Host-amika-login` (`SameSite=None`, 10 minutes) and redirects to
+   `<api_url>/hosts/authorize?origin=<this host's origin>&state=<state>`.
+2. Amika checks the user is signed in and that one of their org's hosts is
+   registered at that origin, then form-posts a login pass to that host's
+   registered URL, `/__amika/callback`. The pass names the origin, state and
+   user, lives a minute, and is signed under a key derived from the secret
+   key. Either clock may be up to five minutes ahead of the other.
+3. hostd checks the pass against the state cookie, answers each state once
+   (remembered for as long as a pass can verify), sets
+   `__Host-amika-session` (`SameSite=Lax`, a day, signed under another
+   derived key), and redirects to the path.
+
+- Lax, not Strict: a preview is opened from Amika, another site, and a
+  Strict session would send every such click back to log in.
+- The return path is resolved as a browser resolves `Location`, and anything
+  that leaves the origin returns to `/`.
+- The session opens nothing yet: keyed service routes, links and the machine
+  API still need their own credentials.
+- hostd sets none of these cookies on a loopback address or an explicit
+  port; `/__amika/login` answers `400` there. Its login responses are
+  `no-store`.
+- hostd strips its own cookies from every forwarded request, and drops any
+  `Set-Cookie` of a guest's under `__Host-amika-`, in a WebSocket
+  handshake's answer as in any other response. That keeps a guest's
+  server out of the login; a guest's page shares the origin, and its script
+  could still set a cookie where none is held, as a host is one trusted
+  unit.
+
 ## API versions
 
 hostd and the control plane upgrade independently, so hostd's API is
