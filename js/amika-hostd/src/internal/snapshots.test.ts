@@ -174,6 +174,19 @@ describe("startCapture", () => {
     expect(store.get("org/sandbox/a")).toBeUndefined();
   });
 
+  it("keeps the end of a long pack's output, which says why", async () => {
+    const progress = "Flattening layer...\n".repeat(100);
+    const { deps, store } = harness(
+      fakePack({ code: 1, output: `${progress}disk full\n` }),
+    );
+    await (
+      await startCapture({ rig: "rig-1", name: "org/sandbox/a" }, deps)
+    ).done;
+    const reason = store.get("org/sandbox/a")?.errorReason ?? "";
+    expect(reason).toMatch(/disk full$/);
+    expect(reason).toMatch(/^smolvm pack create exited 1: /);
+  });
+
   it("records why a pack failed instead of throwing at nobody", async () => {
     const { deps, store, err } = harness(
       fakePack({ code: 1, output: "resize2fs not found\n" }),

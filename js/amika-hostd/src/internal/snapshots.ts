@@ -28,7 +28,11 @@
 import { spawn as nodeSpawn, type ChildProcess } from "node:child_process";
 import path from "node:path";
 import { rmSync } from "node:fs";
-import { RuntimeError, surfaceable } from "./machine-runtime.js";
+import {
+  MAX_REASON_LENGTH,
+  RuntimeError,
+  surfaceable,
+} from "./machine-runtime.js";
 import type { MachineRuntime } from "./machine-runtime.js";
 import type { SnapshotStore } from "./snapshot-store.js";
 import type { Spawn } from "./daemon.js";
@@ -212,13 +216,16 @@ function runPack(
     child.once("close", (code, stoppedBy) => {
       done();
       if (code === 0) return resolve();
-      reject(
-        new Error(
-          stoppedBy
-            ? `smolvm pack create was stopped (${stoppedBy})`
-            : `smolvm pack create exited ${code}: ${output.trim()}`,
-        ),
-      );
+      if (stoppedBy) {
+        return reject(
+          new Error(`smolvm pack create was stopped (${stoppedBy})`),
+        );
+      }
+      // The reason is cut to its first `MAX_REASON_LENGTH` characters, and
+      // a pack says why it died last, after its progress: keep the end.
+      const why = `smolvm pack create exited ${code}: `;
+      const tail = output.trim().slice(-(MAX_REASON_LENGTH - why.length));
+      reject(new Error(`${why}${tail}`));
     });
   });
 }
