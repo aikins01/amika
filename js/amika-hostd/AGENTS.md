@@ -771,8 +771,7 @@ POST   /v0beta1/rigs/<rig>/snapshots   {"name": "<org>/sandbox/<label>"} -> 202
 GET    /v0beta1/snapshots                     every snapshot this host holds
 GET    /v0beta1/snapshots/<name>              one, or 404
 DELETE /v0beta1/snapshots/<name>              204; 409 while it is being
-                                              taken or while a rig from it
-                                              is still here
+                                              taken
 ```
 
 `src/internal/snapshots.ts` takes one: stop the rig, run `smolvm pack create
@@ -792,11 +791,16 @@ stub. `src/internal/snapshot-store.ts` keeps them.
 - **Why hostd owns the stop.** `pack create --from-vm` refuses a running
   machine and smolvm has no one call that stops and packs, so the daemon does
   both itself, under a lock that holds the stop and the pack together for one
-  rig. That lock serializes captures and nothing else: the pack is a separate
-  process, so smolvm's own lifecycle lock is not held across it, and hostd's
-  `start`, `stop`, `delete`, `exec` and file routes reach the runtime during
-  a pack without taking it. A rig started or deleted mid-pack is therefore
-  smolvm's to refuse, not hostd's.
+  rig.
+- **Why hostd keeps everything else off the rig.** The pack is a separate
+  process, so smolvm's own lifecycle lock is not held across it: smolvm
+  starts, execs in or deletes a machine mid-pack without complaint, and the
+  pack then reads disks that are being written. So from the moment a capture
+  reserves its name until the snapshot is `active` or `failed`, hostd answers
+  `409` to every rig route but reading the rig (`leaveCapturedRigAlone`),
+  file reads included, since one may boot a stopped rig. The control plane
+  holds the rig too, as `snapshotting`, but only while it waits on the
+  capture (20 minutes), and a large pack can take longer.
 - **Why it is a subprocess.** The HTTP API's only export pushes to an OCI
   registry; a local artifact comes from the CLI. It runs the binary the
   daemon's own smolvm runs (`ManagedSmolvm.binary`), so both read the same
@@ -827,10 +831,10 @@ stub. `src/internal/snapshot-store.ts` keeps them.
   then the full-OCI-reference passthrough. The store has to come first,
   because a snapshot name contains slashes and would otherwise be forwarded
   to a registry.
-- **A snapshot outlives the rigs made from it.** Packing a rig that booted
-  from an artifact reads that artifact's layers again, so a delete is refused
-  (`409`) while any rig created from it is still on the host. `snapshots.json`
-  records which rig came from which snapshot.
+- **Rigs do not need the snapshot they came from.** smolvm copies an
+  artifact's layers into its own storage when it creates a machine from one,
+  so a snapshot can be deleted while rigs made from it are still here: they
+  boot, run and are packed again without it.
 - **What an interrupted run leaves.** A capture is abandoned when the daemon
   stops: nothing is left that could adopt an artifact, so on startup the store
   turns every `capturing` entry into `failed`, drops entries whose artifact has

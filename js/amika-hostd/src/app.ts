@@ -1,5 +1,5 @@
 /** HTTP surface for the local VM host daemon. */
-import { Hono } from "hono";
+import { Hono, type Context, type Next } from "hono";
 import { bodyLimit } from "hono/body-limit";
 import { HTTPException } from "hono/http-exception";
 import { z } from "zod";
@@ -25,7 +25,6 @@ import {
 } from "@amika/service-auth/gateway";
 import {
   SnapshotConflictError,
-  SnapshotInUseError,
   SnapshotNameError,
   validName as validSnapshotName,
   type SnapshotStore,
@@ -325,25 +324,42 @@ export function createApp(
             { status: 409 },
           );
         }
-        // A rig created from this snapshot reads its layers again when it is
-        // itself packed, so deleting it would quietly break snapshotting
-        // that rig. Refuse while any such rig is still here.
-        const rigs = (await runtime.list()).map((machine) => machine.name);
-        const dependents = store.dependents(name, rigs);
-        if (dependents.length) {
-          return Response.json(
-            { error: new SnapshotInUseError(dependents).message },
-            { status: 409 },
-          );
-        }
+        // Rigs created from it do not need it: smolvm copies an artifact's
+        // layers into its own storage when it creates a machine from one.
         store.remove(name);
         return new Response(null, { status: 204 });
       });
     });
   }
 
+  /**
+   * Refuse to touch a rig while it is being packed. The pack reads the rig's
+   * disks from its own process, outside smolvm's lifecycle lock, so smolvm
+   * would start, exec in or delete the rig mid-pack, and the snapshot would
+   * be read from disks being written. The control plane holds such a rig
+   * too, but only for as long as it waits on the capture, which a large
+   * pack can outlast. Reading the rig is still served.
+   */
+  async function leaveCapturedRigAlone(c: Context, next: Next) {
+    const rig = c.req.param("name");
+    if (rig !== undefined && snapshots?.store.isCapturing(rig)) {
+      return c.json(
+        { error: "Rig is being snapshotted; try again once that finishes" },
+        409,
+      );
+    }
+    await next();
+  }
+
   function machineRoutes(machines: string) {
     app.use(`${machines}/*`, bodyLimit({ maxSize: 64 * 1024 * 1024 }));
+    // Everything but reading the rig: a file read may boot a stopped one.
+    app.on(
+      ["POST", "PUT", "DELETE"],
+      [`${machines}/:name`, `${machines}/:name/*`],
+      leaveCapturedRigAlone,
+    );
+    app.get(`${machines}/:name/files/*`, leaveCapturedRigAlone);
     // hostd's own pre-pull machines are no rigs of Amika's.
     app.get(machines, () =>
       call(async () => {
@@ -359,14 +375,7 @@ export function createApp(
     app.post(machines, async (c) => {
       const input = createMachineSchema.parse(await c.req.json());
       const { services, image: named, ...machine } = input;
-      // `snapshot` names which one this came from, for the store; it is not
-      // part of what the runtime is asked to create.
-      const { snapshot, ...source } = resolveSource(
-        named,
-        images,
-        snapshotSource,
-        configPath,
-      );
+      const source = resolveSource(named, images, snapshotSource, configPath);
       return call(async () => {
         const created = await runtime.create({
           ...machine,
@@ -379,9 +388,6 @@ export function createApp(
           machine.name,
           Object.fromEntries((services ?? []).map((s) => [s.name, s.port])),
         );
-        // Packing a rig that booted from an artifact reads that artifact
-        // again, so the snapshot it came from must outlive it.
-        if (snapshot) snapshots?.store.recordSource(machine.name, snapshot);
         return Response.json(created, { status: 201 });
       });
     });
@@ -401,7 +407,6 @@ export function createApp(
           throw error;
         }
         registry.remove(name);
-        snapshots?.store.forgetSource(name);
         return new Response(null, { status: 204 });
       });
     });

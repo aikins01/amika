@@ -65,8 +65,8 @@ export const createSnapshotSchema = z.strictObject({
 
 /** Where a machine's filesystem comes from: an image, or a local snapshot. */
 export type MachineSource =
-  | { image: string; from?: undefined; snapshot?: undefined }
-  | { image?: undefined; from: string; snapshot: string };
+  | { image: string; from?: undefined }
+  | { image?: undefined; from: string };
 
 /** What `resolveSource` needs of the snapshot store, and nothing more. */
 export interface SnapshotSource {
@@ -108,7 +108,7 @@ export function resolveSource(
           : `snapshot ${JSON.stringify(image)} is not usable on this host (${snapshot.state})`,
       );
     }
-    return { from, snapshot: image };
+    return { from };
   }
   if (image.includes("/") || image.includes(":")) return { image };
   throw badRequest(

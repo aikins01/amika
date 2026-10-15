@@ -61,22 +61,6 @@ export class SnapshotNameError extends Error {
   override name = "SnapshotNameError";
 }
 
-/**
- * Raised when a snapshot cannot be deleted because rigs created from it are
- * still here. Packing such a rig reads the artifact's layers again, so
- * removing it would leave those rigs un-snapshottable with no sign of why.
- */
-export class SnapshotInUseError extends Error {
-  override name = "SnapshotInUseError";
-  constructor(readonly rigs: readonly string[]) {
-    super(
-      `snapshot is still the source of ${rigs.join(", ")}; delete ${
-        rigs.length === 1 ? "that rig" : "those rigs"
-      } first`,
-    );
-  }
-}
-
 export interface SnapshotStore {
   list(): SnapshotInfo[];
   get(name: string): SnapshotInfo | undefined;
@@ -99,14 +83,10 @@ export interface SnapshotStore {
   /** A private directory for a capture to stage its artifact in. */
   staging(): string;
   /**
-   * The rigs that were created from `name` and may still need it: packing a
-   * rig that booted from an artifact reads that artifact's layers again.
+   * Whether a capture holds `rig`: from the moment its name is reserved
+   * until the snapshot is `active` or `failed`.
    */
-  dependents(name: string, rigs: Iterable<string>): string[];
-  /** Record that `rig` was created from the snapshot named `snapshot`. */
-  recordSource(rig: string, snapshot: string): void;
-  /** Forget a deleted rig's recorded source snapshot. */
-  forgetSource(rig: string): void;
+  isCapturing(rig: string): boolean;
 }
 
 export interface SnapshotStoreOptions {
@@ -253,20 +233,10 @@ export function openSnapshotStore({
       mkdirSync(dir, { recursive: true, mode: 0o700 });
       return dir;
     },
-    dependents: (name, rigs) => {
-      const live = new Set(rigs);
-      return [...index.sources]
-        .filter(([rig, snapshot]) => snapshot === name && live.has(rig))
-        .map(([rig]) => rig)
-        .sort();
-    },
-    recordSource: (rig, snapshot) => {
-      index.sources.set(rig, snapshot);
-      save();
-    },
-    forgetSource: (rig) => {
-      if (index.sources.delete(rig)) save();
-    },
+    isCapturing: (rig) =>
+      [...index.snapshots.values()].some(
+        (entry) => entry.state === "capturing" && entry.sourceRig === rig,
+      ),
   };
 }
 
@@ -329,13 +299,10 @@ const entrySchema = z.object({
 
 const indexSchema = z.object({
   snapshots: z.array(entrySchema).default([]),
-  /** Which snapshot each rig was created from (`dependents`). */
-  sources: z.record(z.string(), z.string()).default({}),
 });
 
 interface SnapshotIndex {
   snapshots: Map<string, SnapshotEntry>;
-  sources: Map<string, string>;
 }
 
 /** A missing or unreadable index is an empty one, as `prepull.json` is. */
@@ -344,10 +311,9 @@ function readIndex(file: string): SnapshotIndex {
     const parsed = indexSchema.parse(JSON.parse(readFileSync(file, "utf8")));
     return {
       snapshots: new Map(parsed.snapshots.map((entry) => [entry.name, entry])),
-      sources: new Map(Object.entries(parsed.sources)),
     };
   } catch {
-    return { snapshots: new Map(), sources: new Map() };
+    return { snapshots: new Map() };
   }
 }
 
@@ -355,10 +321,7 @@ function writeIndex(file: string, index: SnapshotIndex): void {
   writePrivateFile(
     file,
     `${JSON.stringify(
-      {
-        snapshots: [...index.snapshots.values()],
-        sources: Object.fromEntries(index.sources),
-      },
+      { snapshots: [...index.snapshots.values()] },
       null,
       2,
     )}\n`,

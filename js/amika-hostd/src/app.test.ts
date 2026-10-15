@@ -1542,10 +1542,8 @@ describe("snapshots", () => {
   /** An in-memory stand-in for the on-disk store (`snapshot-store.ts`). */
   function fakeStore() {
     const snapshots = new Map<string, Record<string, unknown>>();
-    const sources = new Map<string, string>();
     return {
       snapshots,
-      sources,
       list: () => [...snapshots.values()],
       get: (name: string) => snapshots.get(name),
       artifact: (name: string) =>
@@ -1557,16 +1555,10 @@ describe("snapshots", () => {
       fail: vi.fn(),
       remove: vi.fn((name: string) => snapshots.delete(name)),
       staging: () => "/tmp/staging",
-      dependents: (name: string, rigs: Iterable<string>) => {
-        const live = new Set(rigs);
-        return [...sources]
-          .filter(([rig, from]) => from === name && live.has(rig))
-          .map(([rig]) => rig);
-      },
-      recordSource: vi.fn((rig: string, snapshot: string) =>
-        sources.set(rig, snapshot),
-      ),
-      forgetSource: vi.fn((rig: string) => sources.delete(rig)),
+      isCapturing: (rig: string) =>
+        [...snapshots.values()].some(
+          (s) => s.state === "capturing" && s.sourceRig === rig,
+        ),
     };
   }
 
@@ -1689,28 +1681,77 @@ describe("snapshots", () => {
     expect(store.snapshots.has(NAME)).toBe(true);
   });
 
-  it("refuses to delete one a live rig was created from", async () => {
-    // Packing a rig that booted from an artifact reads that artifact again,
-    // so removing it would leave the rig un-snapshottable with no sign why.
-    const runtime = fakeRuntime();
-    runtime.list.mockResolvedValue([{ ...MACHINE, name: "child" }]);
-    const { app, store } = withSnapshots(runtime);
+  // smolvm copies an artifact's layers into its own storage when it creates
+  // a machine from one, so the rigs made from a snapshot never need it.
+  it("deletes one whatever rigs were created from it", async () => {
+    const { app, store, runtime } = withSnapshots();
     store.snapshots.set(NAME, { name: NAME, state: "active" });
-    store.sources.set("child", NAME);
-
     const response = await app.request(`${SNAPSHOTS}/${NAME}`, {
       method: "DELETE",
     });
-    expect(response.status).toBe(409);
-    expect(await response.json()).toEqual({
-      error: expect.stringContaining("child"),
+    expect(response.status).toBe(204);
+    expect(store.remove).toHaveBeenCalledWith(NAME);
+    expectUntouched(runtime);
+  });
+
+  describe("a rig being snapshotted", () => {
+    function capturing() {
+      const setup = withSnapshots();
+      setup.store.snapshots.set(NAME, {
+        name: NAME,
+        state: "capturing",
+        sourceRig: "demo",
+      });
+      return setup;
+    }
+
+    // The pack reads the rig's disks outside smolvm's lifecycle lock, so a
+    // start or a write mid-pack would land in the snapshot half-done.
+    it.each([
+      ["POST", "/demo/start"],
+      ["POST", "/demo/stop"],
+      ["POST", "/demo/exec"],
+      ["GET", "/demo/files/etc/hostname"],
+      ["PUT", "/demo/files/tmp/x"],
+      ["PUT", "/demo/services"],
+      ["DELETE", "/demo"],
+    ])("refuses %s %s, leaving the runtime alone", async (method, path) => {
+      const { app, runtime } = capturing();
+      for (const prefix of [RIGS, ROOT]) {
+        const response = await app.request(`${prefix}${path}`, {
+          method,
+          headers: { "Content-Type": "application/json" },
+          body: method === "GET" || method === "DELETE" ? undefined : "{}",
+        });
+        expect(response.status, `${prefix}${path}`).toBe(409);
+        expect(await response.json()).toEqual({
+          error: expect.stringContaining("being snapshotted"),
+        });
+      }
+      expectUntouched(runtime);
     });
 
-    // Once the rig is gone the snapshot is free again.
-    runtime.list.mockResolvedValue([]);
-    expect(
-      (await app.request(`${SNAPSHOTS}/${NAME}`, { method: "DELETE" })).status,
-    ).toBe(204);
+    it("still shows the rig, and leaves other rigs alone", async () => {
+      const { app, runtime } = capturing();
+      expect((await app.request(`${RIGS}/demo`)).status).toBe(200);
+      expect(
+        (await app.request(`${RIGS}/other/start`, { method: "POST" })).status,
+      ).toBe(200);
+      expect(runtime.start).toHaveBeenCalledWith("other");
+    });
+
+    it("lets the rig go once the snapshot lands", async () => {
+      const { app, store, runtime } = capturing();
+      store.snapshots.set(NAME, {
+        name: NAME,
+        state: "active",
+        sourceRig: "demo",
+      });
+      expect(
+        (await app.request(`${RIGS}/demo/start`, { method: "POST" })).status,
+      ).toBe(200);
+      expect(runtime.start).toHaveBeenCalledWith("demo");
+    });
   });
 
   describe("creating a rig from one", () => {
@@ -1734,7 +1775,6 @@ describe("snapshots", () => {
       // and the snapshot's name is not part of a create at all.
       expect(created).not.toHaveProperty("image");
       expect(created).not.toHaveProperty("snapshot");
-      expect(store.recordSource).toHaveBeenCalledWith("child", NAME);
     });
 
     it("refuses one that is still being taken", async () => {
@@ -1749,15 +1789,6 @@ describe("snapshots", () => {
         error: expect.stringContaining("still being taken"),
       });
       expectUntouched(runtime);
-    });
-
-    it("forgets a rig's source snapshot when the rig is deleted", async () => {
-      const { app, store } = withSnapshots();
-      store.sources.set("child", NAME);
-      expect(
-        (await app.request(`${RIGS}/child`, { method: "DELETE" })).status,
-      ).toBe(204);
-      expect(store.forgetSource).toHaveBeenCalledWith("child");
     });
 
     it("still resolves presets and full references", async () => {

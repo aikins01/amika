@@ -3,11 +3,11 @@
  *
  * smolvm has no one operation that stops and packs, and `pack create
  * --from-vm` refuses a running machine, so the daemon owns the sequence and
- * holds the stop and the pack together for one rig (`perRig`). That lock
- * serializes captures and nothing else: the pack is a separate process, so
- * smolvm's own lifecycle lock is not held across it, and the daemon's
- * `start`, `stop`, `delete`, `exec` and file routes reach the runtime during
- * a pack without taking it. The pack is a subprocess of the `smolvm` binary
+ * holds the stop and the pack together for one rig (`perRig`). The pack is a
+ * separate process, so smolvm's own lifecycle lock is not held across it;
+ * the daemon's rig routes refuse a rig while the store says it is being
+ * captured (`app.ts`), which is what keeps it stopped until the pack is
+ * done. The pack is a subprocess of the `smolvm` binary
  * this host already runs: the HTTP API's only export pushes to a registry,
  * and a snapshot here never leaves the host.
  *

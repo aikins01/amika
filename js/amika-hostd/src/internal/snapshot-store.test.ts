@@ -15,7 +15,6 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   openSnapshotStore,
   SnapshotConflictError,
-  SnapshotInUseError,
   SnapshotNameError,
   validName,
   type SnapshotStore,
@@ -181,31 +180,22 @@ describe("taking a snapshot", () => {
   });
 });
 
-describe("rigs created from a snapshot", () => {
-  it("names only the rigs that are still here", () => {
+describe("a rig being captured", () => {
+  it("is held from the reservation until the snapshot lands", () => {
     const { store } = open();
-    store.recordSource("rig-1", "org/sandbox/a");
-    store.recordSource("rig-2", "org/sandbox/a");
-    store.recordSource("rig-3", "org/sandbox/b");
+    store.reserve({ name: "org/sandbox/a", sourceRig: "rig-1" });
+    expect(store.isCapturing("rig-1")).toBe(true);
+    expect(store.isCapturing("rig-2")).toBe(false);
 
-    expect(
-      store.dependents("org/sandbox/a", ["rig-1", "rig-2", "rig-3"]),
-    ).toEqual(["rig-1", "rig-2"]);
-    // A rig that is gone from the host no longer holds its source snapshot.
-    expect(store.dependents("org/sandbox/a", ["rig-2"])).toEqual(["rig-2"]);
-    store.forgetSource("rig-2");
-    expect(store.dependents("org/sandbox/a", ["rig-1", "rig-2"])).toEqual([
-      "rig-1",
-    ]);
+    store.activate("org/sandbox/a", stagePack(store));
+    expect(store.isCapturing("rig-1")).toBe(false);
   });
 
-  it("says which rigs are in the way", () => {
-    expect(new SnapshotInUseError(["rig-1"]).message).toContain(
-      "delete that rig",
-    );
-    expect(new SnapshotInUseError(["rig-1", "rig-2"]).message).toContain(
-      "delete those rigs",
-    );
+  it("is let go by a failed capture", () => {
+    const { store } = open();
+    store.reserve({ name: "org/sandbox/a", sourceRig: "rig-1" });
+    store.fail("org/sandbox/a", "the pack failed");
+    expect(store.isCapturing("rig-1")).toBe(false);
   });
 });
 
@@ -215,7 +205,6 @@ describe("reopening after a restart", () => {
     store.reserve({ name: "org/sandbox/done", sourceRig: "r" });
     store.activate("org/sandbox/done", stagePack(store));
     store.reserve({ name: "org/sandbox/midway", sourceRig: "r" });
-    store.recordSource("rig-1", "org/sandbox/done");
 
     // A capture cannot outlive the daemon that spawned it, so on the way
     // back up it is a failure rather than a snapshot stuck at `capturing`.
@@ -225,9 +214,7 @@ describe("reopening after a restart", () => {
       state: "failed",
       errorReason: expect.stringContaining("daemon stopped"),
     });
-    expect(reopened.dependents("org/sandbox/done", ["rig-1"])).toEqual([
-      "rig-1",
-    ]);
+    expect(reopened.isCapturing("r")).toBe(false);
   });
 
   it("drops a snapshot whose artifact has gone missing", () => {
