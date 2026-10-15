@@ -181,7 +181,16 @@ export function openSnapshotStore({
         createdAt: now,
         updatedAt: now,
       });
-      save();
+      try {
+        save();
+      } catch (error) {
+        // No capture starts on a reservation the index never took, so the
+        // name and the rig must not stay held by it: a `capturing` entry
+        // only in memory would refuse the rig's routes until a restart.
+        if (existing) index.snapshots.set(name, existing);
+        else index.snapshots.delete(name);
+        throw error;
+      }
     },
     activate: (name, stagedArtifact) => {
       const entry = held(index, name);

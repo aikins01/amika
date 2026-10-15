@@ -2,6 +2,7 @@
 import {
   chmodSync,
   existsSync,
+  mkdirSync,
   mkdtempSync,
   readdirSync,
   readFileSync,
@@ -181,6 +182,18 @@ describe("taking a snapshot", () => {
 });
 
 describe("a rig being captured", () => {
+  // A full disk, say: the capture never starts, so nothing would ever
+  // release a reservation left behind in memory.
+  it("is not held by a reservation the index could not record", () => {
+    const { store, root } = open();
+    mkdirSync(path.join(root, "snapshots.json"));
+    expect(() =>
+      store.reserve({ name: "org/sandbox/a", sourceRig: "rig-1" }),
+    ).toThrow();
+    expect(store.isCapturing("rig-1")).toBe(false);
+    expect(store.get("org/sandbox/a")).toBeUndefined();
+  });
+
   it("is held from the reservation until the snapshot lands", () => {
     const { store } = open();
     store.reserve({ name: "org/sandbox/a", sourceRig: "rig-1" });
