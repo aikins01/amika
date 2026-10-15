@@ -41,12 +41,21 @@ import { AMIKAD_SERVICE, type GatewayRequest } from "./routes";
 export const LINK_COOKIE = "__Host-amika-service-link";
 
 /**
- * The gateway's cookies for browser login (`./browser-login.ts`): the
- * signed browser session, and a login in progress. Like the link cookie,
- * neither reaches a guest.
+ * The gateway's cookies for previews (`./browser-login.ts`): the signed
+ * browser session, the preview whose root-relative URLs a page asks for,
+ * and a login in progress. Like the link cookie, none reaches a guest.
  */
 export const SESSION_COOKIE = "__Host-amika-session";
+export const PREVIEW_COOKIE = "__Host-amika-preview";
 export const LOGIN_STATE_COOKIE = "__Host-amika-login";
+
+/**
+ * A `Set-Cookie` value that removes the gateway cookie `name`: opening a
+ * link or a preview takes the root from the other.
+ */
+export function expiredCookie(name: string): string {
+  return `${name}=; Path=/; Max-Age=0; HttpOnly; Secure; SameSite=Strict`;
+}
 
 /**
  * Whether a guest's `Set-Cookie` would set one of the gateway's cookies, or
@@ -66,6 +75,7 @@ const GATEWAY_COOKIE_PREFIX = "__host-amika-";
 const GATEWAY_COOKIES: ReadonlySet<string> = new Set([
   LINK_COOKIE,
   SESSION_COOKIE,
+  PREVIEW_COOKIE,
   LOGIN_STATE_COOKIE,
 ]);
 

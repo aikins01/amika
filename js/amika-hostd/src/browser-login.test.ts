@@ -1,4 +1,4 @@
-/** Exercise browser login through the daemon's HTTP boundary. */
+/** Exercise browser login and previews through the daemon's HTTP boundary. */
 import { signLoginPass } from "@amika/service-auth/credentials";
 import { describe, expect, it, vi } from "vitest";
 import { createApp } from "./app.js";
@@ -8,6 +8,8 @@ import { memoryServiceRegistry } from "./internal/service-registry.js";
 const SECRET = "test-secret";
 const AMIKA = "https://app.amika.test";
 const HOST = "https://preview.example";
+const PREVIEW = `${HOST}/v0beta1/rigs/demo/previews/web`;
+const NAVIGATE = { "Sec-Fetch-Mode": "navigate", "Sec-Fetch-Site": "none" };
 
 /** A host whose `demo` rig serves `web` and amikad; the guest answers `ok`. */
 function host({ amikaUrl = AMIKA as string | null } = {}) {
@@ -67,6 +69,36 @@ async function logIn(
 }
 
 describe("browser login", () => {
+  it("lists browser-login in health only with Amika's URL to log in at", async () => {
+    const health = async (amikaUrl: string | null) => {
+      const response = await host({ amikaUrl }).app.request("/health", {
+        headers: { Authorization: `Bearer ${SECRET}` },
+      });
+      return ((await response.json()) as { features: string[] }).features;
+    };
+    expect(await health(AMIKA)).toContain("browser-login");
+    expect(await health(null)).not.toContain("browser-login");
+  });
+
+  it("sends a page load without a session to log in, and back", async () => {
+    const { app, guest } = host();
+    const response = await app.request(`${PREVIEW}/docs?x=1`, {
+      headers: NAVIGATE,
+    });
+    expect(response.status).toBe(302);
+    expect(response.headers.get("location")).toBe(
+      `/__amika/login?return=${encodeURIComponent("/v0beta1/rigs/demo/previews/web/docs?x=1")}`,
+    );
+    expect(guest).not.toHaveBeenCalled();
+  });
+
+  it("refuses anything but a page load without a session", async () => {
+    const { app, guest } = host();
+    const response = await app.request(`${PREVIEW}/api/data`);
+    expect(response.status).toBe(401);
+    expect(guest).not.toHaveBeenCalled();
+  });
+
   it("starts a login at Amika, naming this host's origin", async () => {
     const { start } = await logIn(host().app);
     expect(start.status).toBe(302);
@@ -104,6 +136,68 @@ describe("browser login", () => {
     );
     expect(setCookie(callback, "__Host-amika-login")).toMatch(/Max-Age=0/);
     expect(session).toBeDefined();
+  });
+
+  it("serves the preview with a session, keeping hostd's cookies off the guest", async () => {
+    const { app, guest } = host();
+    const { session } = await logIn(app);
+    const response = await app.request(`${PREVIEW}/docs?x=1`, {
+      headers: { ...NAVIGATE, Cookie: `${session}; theme=dark` },
+    });
+    expect(response.status).toBe(200);
+    expect(await response.text()).toBe("ok");
+    const [[target, init]] = guest.mock.calls;
+    expect(target).toBe("http://127.0.0.1:41001/docs?x=1");
+    expect(new Headers(init?.headers).get("cookie")).toBe("theme=dark");
+    // No credential in the URL, so the guest's caching stands, but private.
+    expect(response.headers.get("cache-control")).toBe("private, max-age=60");
+    expect(response.headers.get("x-robots-tag")).toBe("noindex");
+    // And its root-relative URLs now reach this service.
+    expect(setCookie(response, "__Host-amika-preview")).toMatch(
+      /^__Host-amika-preview=demo\/web; .*SameSite=Strict$/,
+    );
+  });
+
+  it("routes a root-relative URL to the preview the page opened", async () => {
+    const { app, guest } = host();
+    const { session } = await logIn(app);
+    const cookie = `${session}; __Host-amika-preview=demo/web`;
+    const response = await app.request(`${HOST}/@vite/client`, {
+      headers: { Cookie: cookie, "Sec-Fetch-Site": "same-origin" },
+    });
+    expect(response.status).toBe(200);
+    expect(guest.mock.calls[0][0]).toBe("http://127.0.0.1:41001/@vite/client");
+
+    // Not without the session, and not for another site's page.
+    const withoutSession = await app.request(`${HOST}/@vite/client`, {
+      headers: {
+        Cookie: "__Host-amika-preview=demo/web",
+        "Sec-Fetch-Site": "same-origin",
+      },
+    });
+    expect(withoutSession.status).toBe(401);
+    const crossSite = await app.request(`${HOST}/@vite/client`, {
+      headers: { Cookie: cookie, "Sec-Fetch-Site": "same-site" },
+    });
+    expect(crossSite.status).toBe(401);
+  });
+
+  // A reload of a root-relative page after the session expired logs in
+  // again and returns there, rather than sticking on 401.
+  it("sends a cookie-routed page load without a session to log in", async () => {
+    const { app, guest } = host();
+    const response = await app.request(`${HOST}/docs?tab=2`, {
+      headers: {
+        Cookie: "__Host-amika-preview=demo/web",
+        "Sec-Fetch-Mode": "navigate",
+        "Sec-Fetch-Site": "same-origin",
+      },
+    });
+    expect(response.status).toBe(302);
+    expect(response.headers.get("location")).toBe(
+      `/__amika/login?return=${encodeURIComponent("/v0beta1/rigs/demo/previews/web/docs?tab=2")}`,
+    );
+    expect(guest).not.toHaveBeenCalled();
   });
 
   it("answers a pass once", async () => {
@@ -188,6 +282,27 @@ describe("browser login", () => {
     expect(callback.headers.get("location")).toBe("/docs?q=1%202");
   });
 
+  it("refuses a session at another origin", async () => {
+    const { app } = host();
+    const { session } = await logIn(app);
+    const response = await app.request(
+      "https://other.example/v0beta1/rigs/demo/previews/web/",
+      { headers: { Cookie: session! } },
+    );
+    expect(response.status).toBe(401);
+  });
+
+  it("serves no preview of amikad, session or not", async () => {
+    const { app, guest } = host();
+    const { session } = await logIn(app);
+    const response = await app.request(
+      `${HOST}/v0beta1/rigs/demo/previews/amikad/`,
+      { headers: { ...NAVIGATE, Cookie: session! } },
+    );
+    expect(response.status).toBe(401);
+    expect(guest).not.toHaveBeenCalled();
+  });
+
   it("does not let a session open the keyed service route", async () => {
     const { app } = host();
     const { session } = await logIn(app);
@@ -198,8 +313,11 @@ describe("browser login", () => {
     expect(response.status).toBe(401);
   });
 
-  it("serves no login without Amika's URL", async () => {
+  it("serves no previews or login without Amika's URL", async () => {
     const { app } = host({ amikaUrl: null });
     expect((await app.request(`${HOST}/__amika/login`)).status).toBe(401);
+    expect(
+      (await app.request(`${PREVIEW}/`, { headers: NAVIGATE })).status,
+    ).toBe(401);
   });
 });

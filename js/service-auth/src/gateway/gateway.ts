@@ -13,16 +13,15 @@
  * - `/v0beta1/rigs/<rig>/service-links/<name>/<token>/...`, a signed link.
  * - Any path outside the server's own (`isOwnPath`) with the link cookie a
  *   link set (`./link-cookie.ts`): a page's root-relative URLs.
- *
- * With `amikaUrl`, the gateway also logs browsers in through Amika
- * (`./browser-login.ts`), on two endpoints the server mounts: `startLogin`
- * and `finishLogin`. The session it sets opens previews, which come next.
+ * - With `amikaUrl`, `/v0beta1/rigs/<rig>/previews/<name>/...` and the
+ *   preview cookie, for a browser holding a session it logged in for
+ *   through Amika (`./browser-login.ts`). The login itself runs on two
+ *   endpoints the server mounts: `startLogin` and `finishLogin`.
  *
  * Every credential is the gateway's: the server forwards none of them
  * (`isCredentialHeader`, `guestCookies`), it drops a guest's `Set-Cookie`
  * for any of the gateway's cookies (`finish`, `finishUpgrade`), and
- * responses on a link are hardened (`harden`), since their URL is a
- * credential.
+ * responses on a link or a preview are hardened (`harden`).
  */
 import {
   SERVICE_KEY_HEADER,
@@ -32,20 +31,30 @@ import {
   authorizeServiceRouteRequest,
 } from "./keys";
 import {
+  PREVIEW_COOKIE,
   carriesGatewayCookie,
+  expiredCookie,
   linkCookie,
   linkFromCookie,
   setsGatewayCookie,
   withoutGatewayCookies,
 } from "./link-cookie";
+import { hardenServiceLinkResponse, tokenHint } from "./responses";
 import {
   CALLBACK_PATH,
   LOGIN_PATH,
   finishLogin,
+  hardenPreviewResponse,
+  hasSession,
+  isOwnOrPageLoad,
+  loginLocation,
+  loginRedirect,
+  parsePreviewPath,
+  previewCookies,
+  previewFromCookie,
   startLogin,
   usedLoginStates,
 } from "./browser-login";
-import { hardenServiceLinkResponse, tokenHint } from "./responses";
 import {
   isAmikadSshUpgrade,
   parseServiceLinkPath,
@@ -63,17 +72,18 @@ export interface GatewayOptions {
    */
   isOwnPath: (pathname: string) => boolean;
   /**
-   * Amika's URL, where a browser is sent to log in. Without it the gateway
-   * logs no browser in, and serves no previews.
+   * Amika's URL, where a browser opening a preview is sent to log in.
+   * Without it the gateway serves no previews.
    */
   amikaUrl?: string;
 }
 
 /**
- * Where a request came in: a keyed or token service route, or a link (its
- * path, or the cookie it set). A link's responses are hardened.
+ * Where a request came in: a keyed or token service route, a link (its
+ * path, or the cookie it set), or a preview (its path, or its cookie). A
+ * link's and a preview's responses are hardened, each its own way.
  */
-export type GatewaySurface = "service" | "link";
+export type GatewaySurface = "service" | "link" | "preview";
 
 /** Forward the request to `route`'s service. */
 export interface ForwardDecision {
@@ -85,22 +95,32 @@ export interface ForwardDecision {
    * forward it only to amikad on the port Amika registers it at.
    */
   keyless: boolean;
-  /** To add to the response: a link opened in a browser sets its cookie. */
-  setCookie: string | null;
+  /**
+   * To add to the response: a link or preview opened in a browser sets its
+   * cookie and ends the other's.
+   */
+  setCookies: string[];
 }
 
 /** Refuse the request with `status`. */
 export interface RefuseDecision {
   kind: "refuse";
   surface: GatewaySurface;
-  status: 400 | 401 | 404;
+  status: 400 | 401 | 403 | 404;
   /** What a refused `curl` should do next, for a 401's body. */
   hint?: string;
+}
+
+/** Send the browser to log in, at `location`, before it may have this. */
+export interface LoginDecision {
+  kind: "login";
+  location: string;
 }
 
 export type GatewayDecision =
   | ForwardDecision
   | RefuseDecision
+  | LoginDecision
   /** Not a service request: the server handles it under its own rules. */
   | { kind: "not-mine" };
 
@@ -117,6 +137,23 @@ export function createGateway({
     isOwnPath(url.pathname)
       ? null
       : linkFromCookie(headers.get("cookie"), headers.get("sec-fetch-site"));
+  /** A preview's path, or a root-relative URL its cookie routes. */
+  const previewClaim = (request: GatewayRequest) => {
+    if (!previews) return null;
+    const { url, headers } = request;
+    const route = parsePreviewPath(url.pathname);
+    if (route) return { route, cookie: false };
+    // A link cookie wins. Opening a link or a preview ends the other's
+    // cookie, so a browser holding both is one where that failed.
+    if (isOwnPath(url.pathname) || cookieClaim(request)) return null;
+    const preview = previewFromCookie(
+      headers.get("cookie"),
+      headers.get("sec-fetch-site"),
+    );
+    return (
+      preview && { route: { ...preview, path: url.pathname }, cookie: true }
+    );
+  };
 
   return {
     /**
@@ -129,7 +166,8 @@ export function createGateway({
         parseServicePath(pathname) ||
         parseServiceLinkPath(pathname) ||
         cookieClaim(request) ||
-        (previews && (pathname === LOGIN_PATH || pathname === CALLBACK_PATH)),
+        (previews && (pathname === LOGIN_PATH || pathname === CALLBACK_PATH)) ||
+        previewClaim(request),
       );
     },
 
@@ -165,7 +203,47 @@ export function createGateway({
         );
         if (refusal)
           return { kind: "refuse", surface: "link", status: refusal };
-        return forward("link", link, { setCookie: null });
+        return forward("link", link, { setCookies: [] });
+      }
+
+      const preview = previewClaim(request);
+      if (preview) {
+        const { route } = preview;
+        if (
+          preview.cookie &&
+          !upgrade &&
+          headers.get("service-worker") === "script"
+        ) {
+          return { kind: "refuse", surface: "preview", status: 404 };
+        }
+        if (!(await hasSession(headers.get("cookie"), url, secretKey))) {
+          // A page load logs in and comes back to the same path, whether
+          // the preview's own or one its cookie routes.
+          if (
+            !upgrade &&
+            request.method === "GET" &&
+            headers.get("sec-fetch-mode") === "navigate"
+          ) {
+            return {
+              kind: "login",
+              location: loginLocation(url, preview.cookie ? route : undefined),
+            };
+          }
+          return {
+            kind: "refuse",
+            surface: "preview",
+            status: 401,
+            hint: "Open the preview in a browser to log in through Amika, or send a service token to the rig's service route.",
+          };
+        }
+        if (!isOwnOrPageLoad(request, { upgrade })) {
+          return { kind: "refuse", surface: "preview", status: 403 };
+        }
+        // Opening a preview hands its root-relative URLs to this service,
+        // and a page load the cookie routes renews that cookie.
+        return forward("preview", route, {
+          setCookies: upgrade ? [] : previewCookies(request, route),
+        });
       }
 
       const link = parseServiceLinkPath(url.pathname);
@@ -178,8 +256,13 @@ export function createGateway({
         if (refusal)
           return { kind: "refuse", surface: "link", status: refusal };
         // Opening a link hands its root-relative URLs to this service.
+        const cookie = upgrade ? null : linkCookie(request, link);
         return forward("link", link, {
-          setCookie: upgrade ? null : linkCookie(request, link),
+          setCookies: !cookie
+            ? []
+            : previews
+              ? [cookie, expiredCookie(PREVIEW_COOKIE)]
+              : [cookie],
         });
       }
 
@@ -205,7 +288,7 @@ export function createGateway({
           ...(refusal === 401 ? tokenHint(route, credentials.token) : {}),
         };
       }
-      return forward("service", route, { keyless, setCookie: null });
+      return forward("service", route, { keyless, setCookies: [] });
     },
 
     /** The HTTP answer to a refusal. */
@@ -228,7 +311,12 @@ export function createGateway({
                 },
                 { status: 400 },
               )
-            : Response.json({ error: "Not found" }, { status: 404 });
+            : decision.status === 403
+              ? Response.json(
+                  { error: "Forbidden: not a request from this preview" },
+                  { status: 403 },
+                )
+              : Response.json({ error: "Not found" }, { status: 404 });
       return harden(decision, response);
     },
 
@@ -247,8 +335,8 @@ export function createGateway({
           if (!setsGatewayCookie(cookie)) headers.append("set-cookie", cookie);
         }
       }
-      if (decision.setCookie) {
-        response.headers.append("set-cookie", decision.setCookie);
+      for (const cookie of decision.setCookies) {
+        headers.append("set-cookie", cookie);
       }
       return harden(decision, response);
     },
@@ -284,10 +372,12 @@ export function createGateway({
         .join("\r\n");
     },
 
-    /**
-     * Whether this gateway logs browsers in, for the previews their session
-     * opens.
-     */
+    /** The HTTP answer to a login decision. */
+    login(decision: LoginDecision): Response {
+      return loginRedirect(decision.location);
+    },
+
+    /** Whether this gateway serves previews, behind a browser login. */
     servesPreviews: previews,
 
     /**
@@ -335,16 +425,25 @@ export function createGateway({
   };
 
   /**
-   * `response` as a link's must be: hardened on the link surface, as is
-   * every answer there, the server's own `404`s and `502`s included.
+   * `response` as its surface's must be: a link's and a preview's hardened,
+   * as is every answer there, the server's own `404`s and `502`s included.
    */
   function harden(
     decision: ForwardDecision | RefuseDecision,
     response: Response,
   ): Response {
-    return decision.surface === "link"
-      ? hardenServiceLinkResponse(response)
-      : response;
+    switch (decision.surface) {
+      case "link":
+        return hardenServiceLinkResponse(response);
+      case "preview":
+        return hardenPreviewResponse(response);
+      case "service":
+        return response;
+      default: {
+        const exhaustive: never = decision.surface;
+        throw new Error(`Unexpected surface: ${String(exhaustive)}`);
+      }
+    }
   }
 
   function forward(
@@ -352,8 +451,8 @@ export function createGateway({
     route: ServiceRoute,
     {
       keyless = false,
-      setCookie,
-    }: { keyless?: boolean; setCookie: string | null },
+      setCookies,
+    }: { keyless?: boolean; setCookies: string[] },
   ): ForwardDecision {
     return {
       kind: "forward",
@@ -364,7 +463,7 @@ export function createGateway({
         path: route.path,
       },
       keyless,
-      setCookie,
+      setCookies,
     };
   }
 }

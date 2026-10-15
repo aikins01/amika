@@ -18,18 +18,21 @@ other.
 `createGateway({ secretKey, isOwnPath, amikaUrl })` returns a gateway whose
 `authorize(request)` answers one of:
 
-- `forward`: the rig, service and guest path to send the request to, any
-  cookie to set on the answer, and whether it came in through a link (whose
-  answers `finish` / `harden` lock down) or is amikad's keyless SSH upgrade
-  (which the server must pin to amikad's port).
-- `refuse`: the status, and for a `401` a hint; `refusal` renders it.
+- `forward`: the rig, service and guest path to send the request to, the
+  cookies to set on the answer, the surface it came in on (a link's or a
+  preview's answers `finish` / `harden` lock down), and whether it is
+  amikad's keyless SSH upgrade (which the server must pin to amikad's port).
+- `refuse`: the status, and for a `401` a hint; `refusal` renders it. A
+  `403` is a preview request that is neither the origin's own nor a page
+  load.
+- `login`: a page load on a preview with no session; `login` renders the
+  redirect to the server's `/__amika/login`.
 - `not-mine`: no service request at all, for the server's own rules.
 
-With `amikaUrl`, the gateway also logs browsers in through Amika
-(`src/gateway/browser-login.ts`), and the server mounts its two endpoints:
-`GET /__amika/login` (`startLogin`) and `POST /__amika/callback`
-(`finishLogin`). `servesPreviews` says whether it does; the session opens
-previews, which come next.
+With `amikaUrl`, the gateway also serves previews behind a browser login
+through Amika (`src/gateway/browser-login.ts`), and the server mounts its two
+endpoints: `GET /__amika/login` (`startLogin`) and `POST /__amika/callback`
+(`finishLogin`). `servesPreviews` says whether it does.
 
 The server does everything else: resolving the rig's port, forwarding the
 request or piping the upgrade, its own API and its own key check. It must not

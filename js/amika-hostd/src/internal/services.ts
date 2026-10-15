@@ -11,7 +11,8 @@
  *
  * Who may reach which service is the gateway's to decide
  * (`@amika/service-auth/gateway`): the host's secret key, a service token, a
- * signed link, or its cookie. This module only carries out its decisions,
+ * signed link or its cookie, or a browser session on a preview. This module
+ * only carries out its decisions,
  * and never forwards a credential of the gateway's to a guest.
  */
 import type { IncomingMessage } from "node:http";
@@ -33,7 +34,7 @@ export const AMIKAD_PORT = 60999;
 
 /**
  * hostd's gateway: the secret key, the paths that are hostd's own, and
- * Amika's URL, which turns on browser login.
+ * Amika's URL, which turns on previews behind a browser login.
  */
 export function hostdGateway(secretKey: string, amikaUrl?: string): Gateway {
   return createGateway({ secretKey, isOwnPath: isHostdPath, amikaUrl });
@@ -52,8 +53,10 @@ export function createUpgradeHandler(
   registry: ServiceRegistry,
   tunnels = new Set<Duplex>(),
   dial: (port: number) => Socket = (port) => connect(port, "127.0.0.1"),
+  /** Amika's URL, which turns on previews (`hostdGateway`). */
+  { amikaUrl }: { amikaUrl?: string } = {},
 ) {
-  const gateway = hostdGateway(secretKey);
+  const gateway = hostdGateway(secretKey, amikaUrl);
   return (request: IncomingMessage, socket: Duplex, head: Buffer): void => {
     // Tracked from the start, not once connected, so a shutdown that begins
     // while the route is still being resolved ends this upgrade too.
@@ -76,6 +79,8 @@ export function createUpgradeHandler(
       return refuse(socket, gateway.checkHostKey(incoming.headers) ?? 404);
     }
     if (decision.kind === "refuse") return refuse(socket, decision.status);
+    // A socket cannot be sent to log in.
+    if (decision.kind === "login") return refuse(socket, 401);
     const { route } = decision;
     // Only the rig's own amikad, on the port Amika registers it at, answers
     // a request that skipped the key.
@@ -171,22 +176,29 @@ export function createUpgradeHandler(
 /** The most of a guest's answer to a handshake hostd holds to read. */
 const MAX_ANSWER_HEAD = 64 * 1024;
 
-/** An upgrade as the gateway reads it; only its path and query are used. */
+/**
+ * An upgrade as the gateway reads it, on its `Host`, as a preview's session
+ * is for the origin it was reached at. A `Host` no URL can hold reaches no
+ * session.
+ */
 function fromIncomingMessage(request: IncomingMessage): GatewayRequest {
   const headers = new Headers();
   for (let i = 0; i < request.rawHeaders.length; i += 2) {
     headers.append(request.rawHeaders[i], request.rawHeaders[i + 1]);
   }
-  return {
-    method: request.method ?? "GET",
-    url: new URL(request.url ?? "/", "http://hostd"),
-    headers,
-  };
+  let url: URL;
+  try {
+    url = new URL(request.url ?? "/", `http://${request.headers.host}`);
+  } catch {
+    url = new URL(request.url ?? "/", "http://hostd");
+  }
+  return { method: request.method ?? "GET", url, headers };
 }
 
 const REFUSAL_REASONS = {
   400: "Bad Request",
   401: "Unauthorized",
+  403: "Forbidden",
   404: "Not Found",
   502: "Bad Gateway",
 } as const;

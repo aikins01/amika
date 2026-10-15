@@ -693,36 +693,62 @@ service with its whole path as the guest path, HTTP and WebSocket upgrades
   `PUT /v0beta1/rigs/<name>/services` replaces the map later (the
   provider's `syncRoutes`), on ports published at create.
 
-### Browser login
+### Previews and browser login
 
-With Amika's URL configured (`api_url`, which hostd always has), hostd logs
-browsers in through Amika (KAPRO-1038), for previews to come: an address
-with no credential in it, opened with a session cookie instead
+With Amika's URL configured (`api_url`, which hostd always has),
+hostd also serves previews: `/v0beta1/rigs/<machine>/previews/<name>/<path>`,
+an address with no credential in it (KAPRO-1038). A browser proves itself
+with a session cookie instead, set after Amika vouched for its user
 (`@amika/service-auth/gateway`; the credentials are in
 `@amika/service-auth/credentials`):
 
-1. `/__amika/login?return=<path>` keeps a random state and the path in
+1. A page load on a preview without a session is redirected to
+   `/__amika/login?return=<path>`, which keeps a random state and the path in
    `__Host-amika-login` (`SameSite=None`, 10 minutes) and redirects to
    `<api_url>/hosts/authorize?origin=<this host's origin>&state=<state>`.
+   A page load a preview cookie routes (a root-relative URL) does the same,
+   returning to its guest path through the preview's own: the Strict preview
+   cookie is not sent on the redirect back from Amika's site, and opening
+   the preview renews it. Anything other than a page load gets `401`.
 2. Amika checks the user is signed in and that one of their org's hosts is
    registered at that origin, then form-posts a login pass to that host's
    registered URL, `/__amika/callback`. The pass names the origin, state and
    user, lives a minute, and is signed under a key derived from the secret
    key. Either clock may be up to five minutes ahead of the other.
-3. hostd checks the pass against the state cookie, answers each state once
-   (remembered for as long as a pass can verify), sets
-   `__Host-amika-session` (`SameSite=Lax`, a day, signed under another
+3. hostd checks the pass against the state cookie, answers each state once,
+   sets `__Host-amika-session` (`SameSite=Lax`, a day, signed under another
    derived key), and redirects to the path.
 
 - Lax, not Strict: a preview is opened from Amika, another site, and a
   Strict session would send every such click back to log in.
+- A session covers every preview on the host, as a host is one trusted unit,
+  and opens nothing else: keyed service routes, links and the machine API
+  still need their own credentials. amikad has no preview.
+- With a session, a preview still answers only this origin's own requests
+  (`Sec-Fetch-Site: same-origin` or `none`) and page loads another site
+  starts, such as Amika opening it; anything else gets `403`. An upgrade
+  must name this origin in `Origin`. Lax counts a sibling subdomain as the
+  same site, and no CORS covers a WebSocket, so without this a page there
+  could post to a preview or read its socket with the session.
+- Opening a preview sets `__Host-amika-preview` (rig and service, no
+  credential), so the page's root-relative URLs and upgrades reach the same
+  service, under the same `Sec-Fetch-Site` rule as the link cookie, and only
+  with the session too. A page load it routes renews it. Opening a preview
+  ends the link cookie and opening a link ends the preview cookie, so the
+  one opened last owns the root.
 - The return path is resolved as a browser resolves `Location`, and anything
   that leaves the origin returns to `/`.
-- The session opens nothing yet: keyed service routes, links and the machine
-  API still need their own credentials.
+- Preview responses drop `Service-Worker-Allowed` and set `X-Robots-Tag:
+noindex`, but keep the guest's own caching, made `private`: the URL is
+  not a credential. A guest's CDN cache policies (`CDN-Cache-Control`,
+  `Cloudflare-CDN-Cache-Control`, `Surrogate-Control`) are dropped there and
+  on links, as a tunnel's CDN would read them first. hostd's login responses
+  are `no-store`.
 - hostd sets none of these cookies on a loopback address or an explicit
-  port; `/__amika/login` answers `400` there. Its login responses are
-  `no-store`.
+  port; `/__amika/login` answers `400` there. `GET /health` lists
+  `browser-login` in `features`, and the `amika-hostd` provider hands out
+  previews only to such a host whose URL is an https origin of its own,
+  keeping service links everywhere else.
 - hostd strips its own cookies from every forwarded request, and drops any
   `Set-Cookie` of a guest's under `__Host-amika-`, in a WebSocket
   handshake's answer as in any other response. That keeps a guest's

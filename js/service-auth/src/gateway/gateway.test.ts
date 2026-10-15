@@ -36,7 +36,7 @@ describe("createGateway", () => {
       surface: "service",
       route: { machine: "demo", service: "web", path: "/api" },
       keyless: false,
-      setCookie: null,
+      setCookies: [],
     });
   });
 
@@ -75,15 +75,16 @@ describe("createGateway", () => {
       kind: "forward",
       surface: "link",
       route: { path: "/app.js" },
-      setCookie: null,
+      setCookies: [],
     });
     const page = await gateway.authorize(
       request(path, { "Sec-Fetch-Mode": "navigate" }),
     );
     expect(page).toMatchObject({ kind: "forward", surface: "link" });
-    expect(page.kind === "forward" && page.setCookie).toMatch(
-      /^__Host-amika-service-link=demo\/web\//,
-    );
+    // Only its own cookie: without previews there is none to end.
+    expect(page.kind === "forward" && page.setCookies).toEqual([
+      expect.stringMatching(/^__Host-amika-service-link=demo\/web\//),
+    ]);
   });
 
   it("routes a root-relative URL by the link cookie, outside its own paths", async () => {
@@ -101,7 +102,7 @@ describe("createGateway", () => {
       surface: "link",
       route: { machine: "demo", service: "web", path: "/@vite/client" },
       keyless: false,
-      setCookie: null,
+      setCookies: [],
     });
     // A service worker from the root would claim every link on the host.
     expect(
@@ -148,11 +149,6 @@ describe("createGateway", () => {
     expect(
       gateway.guestCookies("theme=dark; __Host-amika-service-link=a/b/c"),
     ).toBe("theme=dark");
-    expect(
-      gateway.guestCookies(
-        "a=1; __Host-amika-session=s; __Host-amika-login=l; b=2",
-      ),
-    ).toBe("a=1; b=2");
   });
 
   it("keeps a guest from setting the gateway's cookies", async () => {

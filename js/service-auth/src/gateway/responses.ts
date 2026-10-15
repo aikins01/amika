@@ -39,6 +39,7 @@ export function tokenHint(
  */
 export function hardenServiceLinkResponse(response: Response): Response {
   const headers = response.headers;
+  dropCdnCachePolicies(headers);
   // Every link on the host shares one origin; without this a service worker
   // one link registers would claim the others' paths too.
   headers.delete("service-worker-allowed");
@@ -57,4 +58,19 @@ export function hardenServiceLinkResponse(response: Response): Response {
   // And a link that reaches a crawler should not become a search result.
   headers.set("x-robots-tag", "noindex");
   return response;
+}
+
+/**
+ * Drop a guest's cache policy for CDNs. A tunnel's CDN reads these before
+ * `Cache-Control`, so a guest's `CDN-Cache-Control: max-age=600` would
+ * otherwise have it keep a credentialed answer for everyone.
+ */
+export function dropCdnCachePolicies(headers: Headers): void {
+  for (const name of [
+    "cdn-cache-control",
+    "cloudflare-cdn-cache-control",
+    "surrogate-control",
+  ]) {
+    headers.delete(name);
+  }
 }

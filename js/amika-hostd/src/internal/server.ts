@@ -66,6 +66,8 @@ export function startServer(
     runtime,
     registry,
     tunnels,
+    undefined,
+    { amikaUrl: config.apiUrl },
   );
   return new Promise((resolve, reject) => {
     // Only the default `http.Server` is used, never HTTP/2.
