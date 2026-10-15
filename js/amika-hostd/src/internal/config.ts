@@ -65,6 +65,12 @@ export interface HostdConfig {
    * Amika sends (e.g. `amika-coder`). Only read from TOML.
    */
   images: Record<string, string>;
+  /**
+   * Where this host keeps its snapshot artifacts. Each is gigabytes, so an
+   * operator can point it at a larger disk; unset, the daemon uses its own
+   * state directory (`daemonPaths`).
+   */
+  snapshotDir?: string;
   /** The TOML file the settings were read from, if one was found. */
   configPath?: string;
 }
@@ -104,6 +110,7 @@ export const ENV_NAMES = {
   secretStore: ["AMIKA_HOSTD_SECRET_STORE"],
   host: ["AMIKA_HOSTD_HOST"],
   port: ["AMIKA_HOSTD_PORT"],
+  snapshotDir: ["AMIKA_HOSTD_SNAPSHOT_DIR"],
 } as const;
 
 /** Resolve every setting. Each one takes the first source that sets it. */
@@ -143,6 +150,7 @@ export function resolveConfig({
     smolRequestTimeoutMs: parseTimeout(env.SMOL_REQUEST_TIMEOUT_MS),
     sizes: toHostSizes(toml.sizes ?? {}),
     images: toml.preset_images ?? {},
+    snapshotDir: parseSnapshotDir(fromEnv("snapshotDir") ?? toml.snapshot_dir),
     configPath: file?.path,
   };
 }
@@ -214,6 +222,7 @@ const configFileSchema = z.strictObject({
   api_url: z.string().optional(),
   host: z.string().min(1).optional(),
   port: z.number().int().optional(),
+  snapshot_dir: z.string().trim().min(1).optional(),
   sizes: z.record(z.string().min(1), tomlSizeSchema).optional(),
   preset_images: z
     .record(z.string().min(1), z.string().trim().min(1))
@@ -318,6 +327,26 @@ function parseHostname(value: string | undefined): string | undefined {
     );
   }
   return hostname;
+}
+
+/**
+ * Where snapshot artifacts are kept. Absolute, so the directory a snapshot
+ * lands in never depends on the daemon's working directory: `up` starts the
+ * daemon detached, and a relative path would name a different place
+ * depending on where the operator ran it from.
+ */
+function parseSnapshotDir(value: string | undefined): string | undefined {
+  if (value === undefined) return undefined;
+  const dir = value.trim();
+  if (!path.isAbsolute(dir)) {
+    throw new ConfigError(
+      `Invalid snapshot_dir: ${JSON.stringify(dir)}. Use an absolute path`,
+    );
+  }
+  // Canonical, so `/srv/snapshots/` and `/srv/snapshots` are one directory
+  // and not two entries in a snapshot's recorded location.
+  const normalized = path.normalize(dir);
+  return normalized.length > 1 ? normalized.replace(/\/+$/, "") : normalized;
 }
 
 const DNS_LABEL = /^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$/;

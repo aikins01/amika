@@ -85,11 +85,6 @@ func TestSandboxCreateHostFlagFailsEarly(t *testing.T) {
 			want: "--host needs a hostname or id",
 		},
 		{
-			name: "with --snapshot",
-			args: []string{"--host", "alpha.lan", "--snapshot", "base", "--no-git"},
-			want: "--snapshot cannot be combined with --host",
-		},
-		{
 			// Driven through the real binary, so this also pins that the
 			// create command still registers --provider: createHostRef reads
 			// it with the error discarded, so losing the registration would

@@ -251,20 +251,25 @@ func createHostRef(cmd *cobra.Command) (string, error) {
 	if ref == "" {
 		return "", fmt.Errorf("--host needs a hostname or id; omit it to run the rig on Amika Cloud")
 	}
-	// Caught here rather than as a 400 from the API, which refuses both
+	// Caught here rather than as a 400 from the API, which refuses it
 	// alongside host_id.
 	//
-	// Keyed on the value, not on Changed, unlike --host above: these reject a
-	// request the server would refuse, and an empty --snapshot or --provider
-	// is already dropped from the body further down, so the same invocation
-	// without --host succeeds. --host itself is the other way round because
-	// an empty value there is a failed substitution, not an absent request.
+	// --snapshot is NOT here: a host holds its own snapshots and boots rigs
+	// from them, so the API takes the two together. Which snapshot is
+	// bootable on which host is a question only the server can answer (the
+	// snapshot has to have been taken on this host), so it stays a 400 from
+	// there rather than a guess made here.
 	//
-	// Untrimmed, deliberately: the send path tests these the same way, so a
+	// Keyed on the value, not on Changed, unlike --host above: this rejects a
+	// request the server would refuse, and an empty --provider is already
+	// dropped from the body further down, so the same invocation without
+	// --host succeeds. --host itself is the other way round because an empty
+	// value there is a failed substitution, not an absent request.
+	//
+	// Untrimmed, deliberately: the send path tests this the same way, so a
 	// whitespace-only value does reach the body and must be caught here
 	// rather than coming back as a 400.
 	for _, conflict := range []struct{ flag, why string }{
-		{"snapshot", "a rig on your own host boots its preset's base image, so it has nowhere to fork a cloud snapshot from"},
 		{"provider", "a rig on your own host runs on that host's daemon, not on a cloud provider"},
 	} {
 		if value, _ := cmd.Flags().GetString(conflict.flag); value != "" {

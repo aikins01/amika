@@ -11,6 +11,8 @@ import {
 } from "./service-registry.js";
 import { createUpgradeHandler } from "./services.js";
 import type { MachineRuntime } from "./machine-runtime.js";
+import { openSnapshotStore } from "./snapshot-store.js";
+import { startCapture } from "./snapshots.js";
 
 export interface RunningServer {
   port: number;
@@ -30,6 +32,19 @@ export interface RunningServer {
  */
 export const SHUTDOWN_GRACE_MS = 5_000;
 
+/** What the daemon needs to take and keep snapshots on this host. */
+export interface SnapshotOptions {
+  directory: string;
+  indexFile: string;
+  /** The `smolvm` binary a pack runs through. */
+  smolvm: string;
+  /** smolvm's environment; never carries the daemon's keys. */
+  env: NodeJS.ProcessEnv;
+  err?: (line: string) => void;
+  /** Abandons a capture in flight once the daemon is stopping. */
+  signal?: AbortSignal;
+}
+
 /** Resolve once the port is bound, or reject if it cannot be (e.g. in use). */
 export function startServer(
   config: HostdConfigWith<"secretKey">,
@@ -38,12 +53,19 @@ export function startServer(
     shutdownGraceMs = SHUTDOWN_GRACE_MS,
     servicesFile,
     hiddenMachines,
+    snapshots,
   }: {
     shutdownGraceMs?: number;
     /** Persists service names across restarts; in memory without one. */
     servicesFile?: string;
     /** Machines left out of the machine list (see `AppDeps`). */
     hiddenMachines?: () => ReadonlySet<string>;
+    /**
+     * Where snapshots are kept and how they are packed. Only a daemon
+     * running its own smolvm can supply this: a pack is a subprocess of
+     * that binary. Without it the daemon serves no snapshot routes.
+     */
+    snapshots?: SnapshotOptions;
   } = {},
 ): Promise<RunningServer> {
   const registry = servicesFile
@@ -58,7 +80,11 @@ export function startServer(
       amikaUrl: config.apiUrl,
     },
     runtime,
-    { registry, hiddenMachines },
+    {
+      registry,
+      hiddenMachines,
+      snapshots: snapshotSupport(runtime, snapshots),
+    },
   );
   const tunnels = new Set<Duplex>();
   const upgrade = createUpgradeHandler(
@@ -99,4 +125,23 @@ export function startServer(
       });
     });
   });
+}
+
+/**
+ * Bind the store and the capture together for the app, or nothing when this
+ * daemon cannot pack (no smolvm of its own).
+ */
+function snapshotSupport(
+  runtime: MachineRuntime,
+  options: SnapshotOptions | undefined,
+) {
+  if (!options) return undefined;
+  const { directory, indexFile, ...capture } = options;
+  const store = openSnapshotStore({ directory, indexFile });
+  return {
+    store,
+    capture: async (rig: string, name: string) => {
+      await startCapture({ rig, name }, { runtime, store, ...capture });
+    },
+  };
 }

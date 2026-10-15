@@ -125,11 +125,20 @@ func TestCreateHostRef(t *testing.T) {
 		}
 	})
 
-	// Each conflict gets its own reason: a base-image sentence explains
-	// --snapshot and says nothing at all about --provider.
+	// A host rig boots its own host's snapshots, so --snapshot is passed
+	// through and the server decides: only a snapshot taken on THIS host can
+	// boot here, which is not a question the CLI can answer.
+	t.Run("passes --snapshot through with --host", func(t *testing.T) {
+		c := newCmd()
+		c.Flags().Set("host", "alpha.lan")
+		c.Flags().Set("snapshot", "nightly")
+		if ref, err := createHostRef(c); err != nil || ref != "alpha.lan" {
+			t.Errorf("createHostRef with --snapshot = %q, %v; want the host", ref, err)
+		}
+	})
+
 	t.Run("refuses the flags a host rig cannot honor", func(t *testing.T) {
 		for _, tt := range []struct{ flag, why string }{
-			{"snapshot", "boots its preset's base image"},
 			{"provider", "not on a cloud provider"},
 		} {
 			c := newCmd()
@@ -163,8 +172,13 @@ func TestCreateHostRef(t *testing.T) {
 	// But whitespace is a value, not an absence: the send path forwards it
 	// verbatim, so letting it past here would turn a clear local error into
 	// a 400 from the API.
+	//
+	// --snapshot is not in this set any more. It is a flag a host rig may
+	// legitimately carry, so there is no local rule left to enforce, and a
+	// whitespace-only value reaches the server exactly as it does without
+	// --host -- the same 400, from the same check, either way.
 	t.Run("refuses a whitespace-only value for those flags", func(t *testing.T) {
-		for _, conflict := range []string{"snapshot", "provider"} {
+		for _, conflict := range []string{"provider"} {
 			c := newCmd()
 			c.Flags().Set("host", "alpha.lan")
 			c.Flags().Set(conflict, "  ")
@@ -394,7 +408,10 @@ func TestCreateRemoteSandboxSendsHostID(t *testing.T) {
 	if got := (*body)["host_id"]; got != "host_1" {
 		t.Errorf("host_id = %v, want host_1 (body: %v)", got, *body)
 	}
-	// A host rig takes neither of these, and the API refuses both with host_id.
+	// `provider` the API refuses alongside host_id outright. `snapshot` it
+	// now accepts, which is exactly why an unset flag must still not reach
+	// the body: an empty value would once have been stopped by the local
+	// guard, and is now a request the server has to answer.
 	for _, forbidden := range []string{"provider", "snapshot"} {
 		if _, ok := (*body)[forbidden]; ok {
 			t.Errorf("body carries %q: %v", forbidden, *body)

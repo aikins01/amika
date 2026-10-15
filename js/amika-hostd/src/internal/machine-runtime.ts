@@ -63,7 +63,14 @@ export interface ServicePort {
 
 export interface CreateMachine {
   name: string;
-  image: string;
+  /** The OCI reference to boot. Exclusive with `from`. */
+  image?: string;
+  /**
+   * A local `.smolmachine` artifact to boot instead of an image: how a rig
+   * is created from one of this host's snapshots. smolvm takes the two as
+   * mutually exclusive, so exactly one of these is set.
+   */
+  from?: string;
   cpus?: number;
   memoryMb?: number;
   storageGb?: number;
@@ -138,7 +145,7 @@ const MIN_REDACTED_LENGTH = 4;
  * `secrets` in it replaced by `[redacted]` first, so the cut never leaves
  * part of one behind.
  */
-function surfaceable(
+export function surfaceable(
   reason: string | undefined,
   secrets: readonly string[],
 ): string | undefined {
@@ -264,7 +271,10 @@ export function providerRuntime({
         () =>
           target.create({
             name: machine.name,
-            snapshot: machine.image,
+            // One of the two, never both: a snapshot boots from its artifact
+            // on this host's disk, everything else from an image reference.
+            snapshot: machine.image ?? "",
+            from: machine.from,
             resources: {
               vcpus: machine.cpus,
               memoryGib:

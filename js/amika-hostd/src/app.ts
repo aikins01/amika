@@ -1,5 +1,5 @@
 /** HTTP surface for the local VM host daemon. */
-import { Hono } from "hono";
+import { Hono, type Context, type Next } from "hono";
 import { bodyLimit } from "hono/body-limit";
 import { HTTPException } from "hono/http-exception";
 import { z } from "zod";
@@ -10,11 +10,12 @@ import {
 } from "./internal/machine-runtime.js";
 import {
   createMachineSchema,
+  createSnapshotSchema,
   execSchema,
   filePath,
   machineName,
   replaceServicesSchema,
-  resolveImage,
+  resolveSource,
 } from "./internal/requests.js";
 import {
   fromRequest,
@@ -22,6 +23,12 @@ import {
   hardenServiceLinkResponse,
   type Gateway,
 } from "@amika/service-auth/gateway";
+import {
+  SnapshotConflictError,
+  SnapshotNameError,
+  validName as validSnapshotName,
+  type SnapshotStore,
+} from "./internal/snapshot-store.js";
 import {
   BROWSER_LOGIN_FEATURE,
   CALLBACK_PATH,
@@ -61,9 +68,26 @@ export interface AppConfig {
   amikaUrl?: string;
 }
 
+/**
+ * Taking and keeping snapshots, which only a daemon running its own smolvm
+ * can do (it packs through that binary). Absent, the snapshot routes are not
+ * served and `/health` does not claim the feature, so a control plane can
+ * tell a host that cannot snapshot from one that can.
+ */
+export interface SnapshotSupport {
+  store: SnapshotStore;
+  /**
+   * Reserve `name` and start packing `rig` in the background. Resolves once
+   * the name is held, which is all the route waits for.
+   */
+  capture(rig: string, name: string): Promise<void>;
+}
+
 export interface AppDeps {
   /** Where each machine's service names map to guest ports. */
   registry?: ServiceRegistry;
+  /** This host's snapshots; without it, rigs cannot be snapshotted. */
+  snapshots?: SnapshotSupport;
   /** Reaches a machine's published guest ports for service routes. */
   fetch?: typeof fetch;
   /**
@@ -85,6 +109,7 @@ export function createApp(
   runtime: MachineRuntime,
   {
     registry = memoryServiceRegistry(),
+    snapshots,
     fetch: fetcher = fetch,
     hiddenMachines = () => new Set(),
   }: AppDeps = {},
@@ -129,12 +154,41 @@ export function createApp(
       clearTimeout(timer);
     }
   };
+  /** The store as `resolveSource` reads it; empty when snapshots are off. */
+  const snapshotSource = {
+    get: (name: string) => snapshots?.store.get(name),
+    artifact: (name: string) => snapshots?.store.artifact(name),
+  };
   const app = new Hono();
 
   app.onError((error, c) => {
     if (error instanceof HTTPException) return error.getResponse();
     if (error instanceof z.ZodError || error instanceof SyntaxError) {
       return c.json({ error: "Invalid request" }, 400);
+    }
+    // Snapshot refusals carry no command, environment value, or file
+    // contents, only the name the caller already sent.
+    if (error instanceof SnapshotNameError) {
+      return c.json({ error: error.message }, 400);
+    }
+    if (error instanceof SnapshotConflictError) {
+      return c.json({ error: error.message }, 409);
+    }
+    // A runtime failure from outside `call` (a capture resolves its rig
+    // before the route can wrap it), shaped as `call` shapes one: the
+    // runtime's own status, and smolvm's reason only when it vouched it
+    // safe. Without this a capture of a rig that is not there would look
+    // like a broken host rather than a `404`.
+    if (error instanceof RuntimeError) {
+      return Response.json(
+        {
+          error:
+            error.reason === undefined
+              ? "Smol runtime request failed"
+              : `Smol runtime request failed: ${error.reason}`,
+        },
+        { status: error.status },
+      );
     }
     // Do not return commands, environment values, or upstream error bodies.
     return c.json({ error: "Internal server error" }, 500);
@@ -158,9 +212,13 @@ export function createApp(
     c.json({
       status: "ok",
       apis: [API_VERSION],
-      features: gateway.servesPreviews
-        ? [...FEATURES, BROWSER_LOGIN_FEATURE]
-        : FEATURES,
+      // Each feature is served independently of the others, so each adds
+      // itself.
+      features: [
+        ...FEATURES,
+        ...(gateway.servesPreviews ? [BROWSER_LOGIN_FEATURE] : []),
+        ...(snapshots ? [SNAPSHOTS_FEATURE] : []),
+      ],
     }),
   );
   // Service routes are registered first, so `/<rig>/services/<name>/...`
@@ -187,6 +245,9 @@ export function createApp(
   app.all(`${RIGS_ROUTE}/:name/service-links/:service/:token/*`, (c) =>
     proxyService(c.req.raw, gateway, runtime, registry, fetcher),
   );
+  // Snapshots, only at the versioned path: a control plane old enough to
+  // call the legacy machine API knows nothing about them.
+  if (snapshots) snapshotRoutes(snapshots);
   if (gateway.servesPreviews) {
     app.get(LOGIN_PATH, (c) => gateway.startLogin(c.req.raw));
     app.post(CALLBACK_PATH, bodyLimit({ maxSize: 16 * 1024 }), (c) =>
@@ -222,8 +283,83 @@ export function createApp(
   );
   return app;
 
+  function snapshotRoutes({ store, capture }: SnapshotSupport) {
+    // Taking one: the rig is stopped and packed in the background, so this
+    // answers as soon as the name is held. The control plane polls the
+    // snapshot until it leaves `capturing`.
+    // Its own limit: the machine routes' `bodyLimit` is registered with them,
+    // below this, so it never runs for a route declared here. The body is one
+    // name, so this only has to be small enough that an authenticated caller
+    // cannot make the daemon buffer megabytes before the name is parsed.
+    app.post(
+      `${RIGS_ROUTE}/:name/snapshots`,
+      bodyLimit({ maxSize: 64 * 1024 }),
+      async (c) => {
+        const rig = machineName(c.req.param("name"));
+        const { name } = createSnapshotSchema.parse(await c.req.json());
+        // Outside `call`: a refusal here is the request's (a name already
+        // taken), not the runtime's, and `app.onError` shapes it.
+        await capture(rig, name);
+        return c.json(store.get(name), 202);
+      },
+    );
+    app.get(SNAPSHOTS_ROUTE, (c) => c.json({ snapshots: store.list() }));
+    // A wildcard, not a parameter: Amika's snapshot names carry slashes.
+    app.get(`${SNAPSHOTS_ROUTE}/*`, (c) => {
+      const name = snapshotName(c.req.path);
+      const snapshot = store.get(name);
+      return snapshot
+        ? c.json(snapshot)
+        : c.json({ error: "Snapshot not found" }, 404);
+    });
+    app.delete(`${SNAPSHOTS_ROUTE}/*`, (c) => {
+      const name = snapshotName(c.req.path);
+      return call(async () => {
+        // Deleting a snapshot that is not there is a success, as deleting
+        // any absent resource is; one still being taken is not, since the
+        // capture would write its artifact back after the delete.
+        if (store.get(name)?.state === "capturing") {
+          return Response.json(
+            { error: "Snapshot is still being taken; wait for it to finish" },
+            { status: 409 },
+          );
+        }
+        // Rigs created from it do not need it: smolvm copies an artifact's
+        // layers into its own storage when it creates a machine from one.
+        store.remove(name);
+        return new Response(null, { status: 204 });
+      });
+    });
+  }
+
+  /**
+   * Refuse to touch a rig while it is being packed. The pack reads the rig's
+   * disks from its own process, outside smolvm's lifecycle lock, so smolvm
+   * would start, exec in or delete the rig mid-pack, and the snapshot would
+   * be read from disks being written. The control plane holds such a rig
+   * too, but only for as long as it waits on the capture, which a large
+   * pack can outlast. Reading the rig is still served.
+   */
+  async function leaveCapturedRigAlone(c: Context, next: Next) {
+    const rig = c.req.param("name");
+    if (rig !== undefined && snapshots?.store.isCapturing(rig)) {
+      return c.json(
+        { error: "Rig is being snapshotted; try again once that finishes" },
+        409,
+      );
+    }
+    await next();
+  }
+
   function machineRoutes(machines: string) {
     app.use(`${machines}/*`, bodyLimit({ maxSize: 64 * 1024 * 1024 }));
+    // Everything but reading the rig: a file read may boot a stopped one.
+    app.on(
+      ["POST", "PUT", "DELETE"],
+      [`${machines}/:name`, `${machines}/:name/*`],
+      leaveCapturedRigAlone,
+    );
+    app.get(`${machines}/:name/files/*`, leaveCapturedRigAlone);
     // hostd's own pre-pull machines are no rigs of Amika's.
     app.get(machines, () =>
       call(async () => {
@@ -238,10 +374,14 @@ export function createApp(
     );
     app.post(machines, async (c) => {
       const input = createMachineSchema.parse(await c.req.json());
-      const { services, ...machine } = input;
-      const image = resolveImage(machine.image, images, configPath);
+      const { services, image: named, ...machine } = input;
+      const source = resolveSource(named, images, snapshotSource, configPath);
       return call(async () => {
-        const created = await runtime.create({ ...machine, image, services });
+        const created = await runtime.create({
+          ...machine,
+          ...source,
+          services,
+        });
         // Record names only for a machine that now exists, replacing any a
         // deleted machine of the same name left behind.
         registry.set(
@@ -334,8 +474,31 @@ export const DEFAULT_REQUEST_TIMEOUT_MS = 300_000;
 export const API_VERSION = "v0beta1";
 export const FEATURES = ["service-tokens"];
 const RIGS_ROUTE = `/${API_VERSION}/rigs`;
+/** This host's snapshots, which belong to the host rather than to one rig. */
+const SNAPSHOTS_ROUTE = `/${API_VERSION}/snapshots`;
+/** Named in `/health` by a daemon that can take snapshots. */
+export const SNAPSHOTS_FEATURE = "snapshots";
+
 /** The Smol-compatible machine API, served until no control plane needs it. */
 const LEGACY_MACHINES_ROUTE = "/api/v1/machines";
+
+/**
+ * The snapshot a `/v0beta1/snapshots/...` path names: everything after the
+ * collection, decoded once. A wildcard rather than a route parameter because
+ * Amika's snapshot names are namespaced and so contain slashes, which a
+ * parameter would not match, and which a caller may also send
+ * percent-encoded.
+ */
+function snapshotName(requestPath: string): string {
+  const rest = requestPath.slice(`${SNAPSHOTS_ROUTE}/`.length);
+  let decoded: string;
+  try {
+    decoded = decodeURIComponent(rest);
+  } catch {
+    throw new HTTPException(400, { message: "Invalid snapshot name" });
+  }
+  return validSnapshotName(decoded);
+}
 
 /**
  * Forward a request the gateway claims to the service it names, as the

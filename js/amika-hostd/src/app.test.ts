@@ -6,6 +6,7 @@ import {
 import { describe, expect, it, vi } from "vitest";
 import { createApp } from "./app.js";
 import { memoryServiceRegistry } from "./internal/service-registry.js";
+import { SnapshotConflictError } from "./internal/snapshot-store.js";
 import {
   RuntimeError,
   type CreateMachine,
@@ -1526,5 +1527,294 @@ describe("service-link routes", () => {
       expect((await app.request(path)).status).toBe(401);
     }
     expectUntouched(runtime);
+  });
+});
+
+describe("snapshots", () => {
+  const RIGS = "/v0beta1/rigs";
+  const SNAPSHOTS = "/v0beta1/snapshots";
+  /**
+   * Amika's names are namespaced, so the name is also its own URL path: the
+   * client escapes per segment and the separators stay separators.
+   */
+  const NAME = "org_abc123/sandbox/nightly";
+
+  /** An in-memory stand-in for the on-disk store (`snapshot-store.ts`). */
+  function fakeStore() {
+    const snapshots = new Map<string, Record<string, unknown>>();
+    return {
+      snapshots,
+      list: () => [...snapshots.values()],
+      get: (name: string) => snapshots.get(name),
+      artifact: (name: string) =>
+        snapshots.get(name)?.state === "active"
+          ? `/var/lib/snapshots/${name}.smolmachine`
+          : undefined,
+      reserve: vi.fn(),
+      activate: vi.fn(),
+      fail: vi.fn(),
+      remove: vi.fn((name: string) => snapshots.delete(name)),
+      staging: () => "/tmp/staging",
+      isCapturing: (rig: string) =>
+        [...snapshots.values()].some(
+          (s) => s.state === "capturing" && s.sourceRig === rig,
+        ),
+    };
+  }
+
+  function withSnapshots(runtime = fakeRuntime()) {
+    const store = fakeStore();
+    const capture = vi.fn(async (rig: string, name: string) => {
+      store.snapshots.set(name, { name, state: "capturing", sourceRig: rig });
+    });
+    const app = authenticated(
+      createApp(
+        { secretKey: SECRET, images: { "amika-coder": "ghcr.io/x:1" } },
+        runtime,
+        { snapshots: { store: store as never, capture } },
+      ),
+    );
+    return { app, store, capture, runtime };
+  }
+
+  it("answers 202 once the name is held, not when the pack is done", async () => {
+    const { app, capture } = withSnapshots();
+    const response = await app.request(
+      `${RIGS}/demo/snapshots`,
+      json({ name: NAME }),
+    );
+    expect(response.status).toBe(202);
+    expect(await response.json()).toMatchObject({
+      name: NAME,
+      state: "capturing",
+      sourceRig: "demo",
+    });
+    expect(capture).toHaveBeenCalledWith("demo", NAME);
+  });
+
+  it("reports a name already taken as a conflict", async () => {
+    const { app, capture } = withSnapshots();
+    capture.mockRejectedValue(new SnapshotConflictError("already exists"));
+    const response = await app.request(
+      `${RIGS}/demo/snapshots`,
+      json({ name: NAME }),
+    );
+    expect(response.status).toBe(409);
+    expect(await response.json()).toEqual({ error: "already exists" });
+  });
+
+  it("reports a capture of a rig that is not there as the runtime does", async () => {
+    const { app, capture } = withSnapshots();
+    // `startCapture` resolves the rig before taking the name so an unknown
+    // one is a 404; the route awaits it outside `call`, so `onError` has to
+    // shape a runtime failure the same way.
+    capture.mockRejectedValue(new RuntimeError(404, "no such machine"));
+    const response = await app.request(
+      `${RIGS}/ghost/snapshots`,
+      json({ name: NAME }),
+    );
+    expect(response.status).toBe(404);
+  });
+
+  it("lists and reads snapshots by their slash-separated names", async () => {
+    const { app, store } = withSnapshots();
+    store.snapshots.set(NAME, { name: NAME, state: "active" });
+
+    expect(await (await app.request(SNAPSHOTS)).json()).toEqual({
+      snapshots: [{ name: NAME, state: "active" }],
+    });
+    const one = await app.request(`${SNAPSHOTS}/${NAME}`);
+    expect(one.status).toBe(200);
+    expect(await one.json()).toEqual({ name: NAME, state: "active" });
+    expect(
+      (await app.request(`${SNAPSHOTS}/org_abc123/sandbox/gone`)).status,
+    ).toBe(404);
+  });
+
+  it("reads a name whose segments arrive percent-encoded", async () => {
+    const { app, store } = withSnapshots();
+    store.snapshots.set("org/sandbox/a b", { name: "org/sandbox/a b" });
+    const response = await app.request(`${SNAPSHOTS}/org/sandbox/a%20b`);
+    expect(response.status).toBe(200);
+  });
+
+  it("refuses a name that could never be a snapshot's", async () => {
+    const { app } = withSnapshots();
+    // A NUL cannot be in any name the store holds, so it is refused by name
+    // rather than reported as a snapshot that happens not to exist.
+    expect((await app.request(`${SNAPSHOTS}/org/sandbox/a%00b`)).status).toBe(
+      400,
+    );
+  });
+
+  it("never sees a dot segment, encoded or not", async () => {
+    const { app } = withSnapshots();
+    // The URL parser collapses `..` before routing (percent-encoded too),
+    // so traversal never reaches the handler. The name check and the
+    // derived artifact filename are the layers behind that, not instead of it.
+    for (const traversal of ["org/../etc/passwd", "org/%2E%2E/etc/passwd"]) {
+      expect((await app.request(`${SNAPSHOTS}/${traversal}`)).status).toBe(404);
+    }
+  });
+
+  it("deletes a snapshot, and says so when there was none", async () => {
+    const { app, store } = withSnapshots();
+    store.snapshots.set(NAME, { name: NAME, state: "active" });
+
+    expect(
+      (await app.request(`${SNAPSHOTS}/${NAME}`, { method: "DELETE" })).status,
+    ).toBe(204);
+    expect(store.snapshots.has(NAME)).toBe(false);
+    // Deleting what is not there is done, as for every other resource.
+    expect(
+      (await app.request(`${SNAPSHOTS}/${NAME}`, { method: "DELETE" })).status,
+    ).toBe(204);
+  });
+
+  it("refuses to delete one still being taken", async () => {
+    const { app, store } = withSnapshots();
+    store.snapshots.set(NAME, { name: NAME, state: "capturing" });
+    const response = await app.request(`${SNAPSHOTS}/${NAME}`, {
+      method: "DELETE",
+    });
+    expect(response.status).toBe(409);
+    expect(store.snapshots.has(NAME)).toBe(true);
+  });
+
+  // smolvm copies an artifact's layers into its own storage when it creates
+  // a machine from one, so the rigs made from a snapshot never need it.
+  it("deletes one whatever rigs were created from it", async () => {
+    const { app, store, runtime } = withSnapshots();
+    store.snapshots.set(NAME, { name: NAME, state: "active" });
+    const response = await app.request(`${SNAPSHOTS}/${NAME}`, {
+      method: "DELETE",
+    });
+    expect(response.status).toBe(204);
+    expect(store.remove).toHaveBeenCalledWith(NAME);
+    expectUntouched(runtime);
+  });
+
+  describe("a rig being snapshotted", () => {
+    function capturing() {
+      const setup = withSnapshots();
+      setup.store.snapshots.set(NAME, {
+        name: NAME,
+        state: "capturing",
+        sourceRig: "demo",
+      });
+      return setup;
+    }
+
+    // The pack reads the rig's disks outside smolvm's lifecycle lock, so a
+    // start or a write mid-pack would land in the snapshot half-done.
+    it.each([
+      ["POST", "/demo/start"],
+      ["POST", "/demo/stop"],
+      ["POST", "/demo/exec"],
+      ["GET", "/demo/files/etc/hostname"],
+      ["PUT", "/demo/files/tmp/x"],
+      ["PUT", "/demo/services"],
+      ["DELETE", "/demo"],
+    ])("refuses %s %s, leaving the runtime alone", async (method, path) => {
+      const { app, runtime } = capturing();
+      for (const prefix of [RIGS, ROOT]) {
+        const response = await app.request(`${prefix}${path}`, {
+          method,
+          headers: { "Content-Type": "application/json" },
+          body: method === "GET" || method === "DELETE" ? undefined : "{}",
+        });
+        expect(response.status, `${prefix}${path}`).toBe(409);
+        expect(await response.json()).toEqual({
+          error: expect.stringContaining("being snapshotted"),
+        });
+      }
+      expectUntouched(runtime);
+    });
+
+    it("still shows the rig, and leaves other rigs alone", async () => {
+      const { app, runtime } = capturing();
+      expect((await app.request(`${RIGS}/demo`)).status).toBe(200);
+      expect(
+        (await app.request(`${RIGS}/other/start`, { method: "POST" })).status,
+      ).toBe(200);
+      expect(runtime.start).toHaveBeenCalledWith("other");
+    });
+
+    it("lets the rig go once the snapshot lands", async () => {
+      const { app, store, runtime } = capturing();
+      store.snapshots.set(NAME, {
+        name: NAME,
+        state: "active",
+        sourceRig: "demo",
+      });
+      expect(
+        (await app.request(`${RIGS}/demo/start`, { method: "POST" })).status,
+      ).toBe(200);
+      expect(runtime.start).toHaveBeenCalledWith("demo");
+    });
+  });
+
+  describe("creating a rig from one", () => {
+    it("boots the artifact instead of pulling the name as an image", async () => {
+      const { app, store, runtime } = withSnapshots();
+      store.snapshots.set(NAME, { name: NAME, state: "active" });
+
+      const response = await app.request(
+        RIGS,
+        json({ name: "child", image: NAME }),
+      );
+      expect(response.status).toBe(201);
+      // A snapshot name has slashes, so without the store lookup it would
+      // have been forwarded to a registry as an OCI reference.
+      const created = runtime.create.mock.calls[0][0];
+      expect(created).toMatchObject({
+        name: "child",
+        from: `/var/lib/snapshots/${NAME}.smolmachine`,
+      });
+      // smolvm refuses `from` and `image` together, so only one is sent,
+      // and the snapshot's name is not part of a create at all.
+      expect(created).not.toHaveProperty("image");
+      expect(created).not.toHaveProperty("snapshot");
+    });
+
+    it("refuses one that is still being taken", async () => {
+      const { app, store, runtime } = withSnapshots();
+      store.snapshots.set(NAME, { name: NAME, state: "capturing" });
+      const response = await app.request(
+        RIGS,
+        json({ name: "child", image: NAME }),
+      );
+      expect(response.status).toBe(400);
+      expect(await response.json()).toEqual({
+        error: expect.stringContaining("still being taken"),
+      });
+      expectUntouched(runtime);
+    });
+
+    it("still resolves presets and full references", async () => {
+      const { app, runtime } = withSnapshots();
+      expect(
+        (await app.request(RIGS, json({ name: "a", image: "amika-coder" })))
+          .status,
+      ).toBe(201);
+      const created = runtime.create.mock.calls[0][0];
+      expect(created).toMatchObject({ image: "ghcr.io/x:1" });
+      expect(created).not.toHaveProperty("from");
+    });
+  });
+
+  it("claims the feature only when it can take snapshots", async () => {
+    const { app } = withSnapshots();
+    expect(await (await app.request("/health")).json()).toMatchObject({
+      features: expect.arrayContaining(["snapshots"]),
+    });
+    // A daemon with no smolvm of its own cannot pack, and says so by
+    // omission rather than by failing every capture.
+    const plain = harness().app;
+    const health = (await (await plain.request("/health")).json()) as {
+      features: string[];
+    };
+    expect(health.features).not.toContain("snapshots");
+    expect((await plain.request(SNAPSHOTS)).status).toBe(404);
   });
 });

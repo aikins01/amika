@@ -29,6 +29,12 @@ api_url = "https://app.amika.dev"
 host = "127.0.0.1"
 port = 3020
 
+# Where snapshots of rigs on this host are kept. Each is a multi-gigabyte
+# `.smolmachine` file, so point this at a disk with room for them. Unset, they
+# go under the daemon's state directory (~/.local/state/amika-hostd/snapshots).
+# Environment: AMIKA_HOSTD_SNAPSHOT_DIR
+# snapshot_dir = "/var/lib/amika-hostd/snapshots"
+
 # --- Rig sizes ----------------------------------------------------------------
 #
 # The sizes rigs on this host can use. Amika's sizes for this host are replaced
