@@ -13,12 +13,14 @@ import type {
   CreatedProviderSandbox,
   ExecCommandOptions,
   ProviderSandboxListing,
+  ReadFileBytesOptions,
   RefreshUrlsResult,
   SandboxExecResult,
   SandboxService,
   StreamCommandHandlers,
 } from "../../provider";
 import type { SandboxAdapter } from "../../shared/adapter";
+import { readCapped } from "../../shared/capped-read";
 import type { E2bConfig } from "../config";
 import { E2bAdapter } from "./adapter";
 import {
@@ -284,14 +286,18 @@ export async function readE2bFile(
   config: E2bConfig,
   providerSandboxId: string,
   filePath: string,
+  opts?: ReadFileBytesOptions,
 ): Promise<Uint8Array | null> {
   const sandbox = await connectE2bSandbox(config, providerSandboxId);
+  let stream: ReadableStream<Uint8Array>;
   try {
-    return await sandbox.files.read(filePath, { format: "bytes" });
+    // A missing file is reported here, before any bytes stream.
+    stream = await sandbox.files.read(filePath, { format: "stream" });
   } catch (error) {
     if (error instanceof FileNotFoundError) return null;
     throw error;
   }
+  return readCapped(stream, filePath, opts?.maxBytes);
 }
 
 export async function writeE2bFile(

@@ -1,10 +1,12 @@
+import { Readable } from "node:stream";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import pino from "pino";
 import type { SandboxCtx } from "../../../logger";
 import type { VercelConfig } from "../config";
-import type {
-  CreateSandboxProviderInput,
-  SandboxService,
+import {
+  SandboxFileTooLargeError,
+  type CreateSandboxProviderInput,
+  type SandboxService,
 } from "../../provider";
 import {
   createVercelSandbox,
@@ -459,21 +461,34 @@ describe("readVercelFile", () => {
 
   it("returns the file's bytes undecoded, and null when there are none", async () => {
     const raw = Buffer.from([0x63, 0x61, 0x66, 0xe9]);
-    const readFileToBuffer = vi
+    const readFile = vi
       .fn()
-      .mockResolvedValueOnce(raw)
+      .mockResolvedValueOnce(Readable.from([raw]))
       .mockResolvedValueOnce(null)
       .mockRejectedValueOnce(new Error("gone"));
-    sandboxGet.mockResolvedValue({ readFileToBuffer });
+    sandboxGet.mockResolvedValue({ readFile });
 
-    await expect(readVercelFile(VERCEL_CONFIG, "sbx", "/f")).resolves.toBe(raw);
-    expect(readFileToBuffer).toHaveBeenCalledWith({ path: "/f" });
+    await expect(readVercelFile(VERCEL_CONFIG, "sbx", "/f")).resolves.toEqual(
+      raw,
+    );
+    expect(readFile).toHaveBeenCalledWith({ path: "/f" });
     await expect(
       readVercelFile(VERCEL_CONFIG, "sbx", "/f"),
     ).resolves.toBeNull();
     await expect(
       readVercelFile(VERCEL_CONFIG, "sbx", "/f"),
     ).resolves.toBeNull();
+  });
+
+  it("refuses a file over maxBytes rather than reporting it missing", async () => {
+    const readFile = vi
+      .fn()
+      .mockResolvedValue(Readable.from([Buffer.alloc(3), Buffer.alloc(3)]));
+    sandboxGet.mockResolvedValue({ readFile });
+
+    await expect(
+      readVercelFile(VERCEL_CONFIG, "sbx", "/f", { maxBytes: 5 }),
+    ).rejects.toBeInstanceOf(SandboxFileTooLargeError);
   });
 });
 

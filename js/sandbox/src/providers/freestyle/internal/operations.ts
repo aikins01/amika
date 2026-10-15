@@ -16,6 +16,7 @@ import {
   type CreatedProviderSandbox,
   type ExecCommandOptions,
   type ProviderSandboxListing,
+  type ReadFileBytesOptions,
   type RefreshUrlsResult,
   type SandboxExecResult,
   type SandboxService,
@@ -549,13 +550,14 @@ export async function readFreestyleFile(
   config: FreestyleConfig,
   providerSandboxId: string,
   filePath: string,
+  opts?: ReadFileBytesOptions,
 ): Promise<Uint8Array | null> {
   const client = createFreestyleClient(config);
   const adapter = new FreestyleAdapter(
     client.vms.ref({ vmId: providerSandboxId }),
     client,
   );
-  return adapter.downloadBytes(filePath);
+  return adapter.downloadBytes(filePath, opts?.maxBytes);
 }
 
 export async function writeFreestyleFile(

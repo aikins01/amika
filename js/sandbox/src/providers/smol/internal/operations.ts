@@ -7,6 +7,7 @@ import {
   type CreateSandboxProviderInput,
   type CreatedProviderSandbox,
   type ExecCommandOptions,
+  type ReadFileBytesOptions,
   type RefreshUrlsResult,
   type SandboxResources,
 } from "../../provider";
@@ -15,6 +16,7 @@ import { DEFAULT_HOME_DIR } from "../../../constants";
 import { shellQuote } from "../../../util/shell";
 import { decodeUtf8, execFailureText } from "../../shared/adapter";
 import type { SandboxAdapter } from "../../shared/adapter";
+import { readCapped } from "../../shared/capped-read";
 import type { SandboxStatus } from "../../../sandbox-status";
 import {
   SmolApiError,
@@ -126,7 +128,11 @@ export function smolOperations(
       );
     }
   };
-  const read = async (id: string, path: string): Promise<Uint8Array | null> => {
+  const read = async (
+    id: string,
+    path: string,
+    opts?: ReadFileBytesOptions,
+  ): Promise<Uint8Array | null> => {
     try {
       const response = await client.request(filePath(id, path));
       if (
@@ -139,7 +145,8 @@ export function smolOperations(
           "smolvm returned a directory or an unexpected file content type",
         );
       }
-      return new Uint8Array(await response.arrayBuffer());
+      if (!response.body) return new Uint8Array();
+      return await readCapped(response.body, path, opts?.maxBytes);
     } catch (error) {
       if (error instanceof SmolApiError && error.status === 404) return null;
       throw error;

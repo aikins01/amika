@@ -2,7 +2,10 @@
 import { describe, expect, it, vi } from "vitest";
 import type { CreateSandboxProviderInput } from "../../provider";
 import { SmolClient } from "./client";
-import { SandboxProviderUnsupportedError } from "../../provider";
+import {
+  SandboxFileTooLargeError,
+  SandboxProviderUnsupportedError,
+} from "../../provider";
 import type { SandboxService } from "../../../types";
 import { SmolPortsError, mapSmolState, smolOperations } from "./operations";
 
@@ -369,6 +372,17 @@ describe("smol operations", () => {
       }),
     ]);
     expect(await ops.read(INPUT.name, "/latin1.txt")).toEqual(raw);
+  });
+
+  it("refuses a file over maxBytes", async () => {
+    const { ops } = harness([
+      new Response(new Uint8Array(6), {
+        headers: { "Content-Type": "application/octet-stream" },
+      }),
+    ]);
+    await expect(
+      ops.read(INPUT.name, "/big.bin", { maxBytes: 5 }),
+    ).rejects.toBeInstanceOf(SandboxFileTooLargeError);
   });
 
   it("returns null only for missing files and rejects directory responses", async () => {

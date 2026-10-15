@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { shellQuote } from "../../../util/shell";
+import { SandboxFileTooLargeError } from "../../provider";
 import { buildFreestyleCommand, FreestyleAdapter } from "./adapter";
 
 /**
@@ -126,6 +127,32 @@ describe("FreestyleAdapter handle selection", () => {
     expect(userVm.fs.readFile).toHaveBeenCalledWith("/f");
     userVm.fs.readFile.mockRejectedValue(new Error("not found"));
     await expect(adapter.downloadBytes("/f")).resolves.toBeNull();
+  });
+
+  it("caps a read with head as the amika user, one byte past maxBytes", async () => {
+    const { rootVm, userVm } = fakeVm(() => ({ stdout: "", statusCode: 0 }));
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const adapter = new FreestyleAdapter(rootVm as any);
+    const reply = (bytes: number[], statusCode = 0) =>
+      userVm.exec.mockResolvedValueOnce({
+        stdout: Buffer.from(bytes).toString("base64"),
+        statusCode,
+      });
+
+    reply([1, 2, 3]);
+    await expect(adapter.downloadBytes("/f", 3)).resolves.toEqual(
+      Buffer.from([1, 2, 3]),
+    );
+    expect(userVm.exec.mock.calls[0]![0].command).toContain(
+      "head -c 4 -- '/f'",
+    );
+    expect(userVm.fs.readFile).not.toHaveBeenCalled();
+    reply([1, 2, 3, 4]);
+    await expect(adapter.downloadBytes("/f", 3)).rejects.toBeInstanceOf(
+      SandboxFileTooLargeError,
+    );
+    reply([], 3);
+    await expect(adapter.downloadBytes("/f", 3)).resolves.toBeNull();
   });
 
   it("throws when the upload ownership repair fails", async () => {

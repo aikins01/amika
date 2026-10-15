@@ -216,8 +216,8 @@ function makeSandbox(
       const bytes = await requireFiles("readFile").read(id, filePath);
       return bytes === null ? null : decodeUtf8(bytes);
     },
-    readFileBytes: async (filePath) =>
-      requireFiles("readFileBytes").read(id, filePath),
+    readFileBytes: async (filePath, opts) =>
+      requireFiles("readFileBytes").read(id, filePath, opts),
     writeFile: async (filePath, content) =>
       requireFiles("writeFile").write(id, filePath, content),
     git: backend.cloneRepo ? makeSandboxGit(backend.cloneRepo, id) : null,

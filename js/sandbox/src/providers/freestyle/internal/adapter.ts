@@ -14,6 +14,7 @@
  */
 import type { Freestyle } from "freestyle";
 import { shellQuote } from "../../../util/shell";
+import { SandboxFileTooLargeError } from "../../provider";
 import {
   decodeUtf8,
   execFailureText,
@@ -212,8 +213,15 @@ export class FreestyleAdapter implements SandboxAdapter {
     return bytes === null ? null : decodeUtf8(bytes);
   }
 
-  /** {@link downloadFile} without the UTF-8 decode. */
-  async downloadBytes(path: string): Promise<Uint8Array | null> {
+  /**
+   * {@link downloadFile} without the UTF-8 decode, refusing a file over
+   * `maxBytes` with {@link SandboxFileTooLargeError}.
+   */
+  async downloadBytes(
+    path: string,
+    maxBytes?: number,
+  ): Promise<Uint8Array | null> {
+    if (maxBytes !== undefined) return this.downloadBytesCapped(path, maxBytes);
     try {
       return await this.timed(`read ${path}`, () =>
         this.userVm.fs.readFile(path),
@@ -221,6 +229,32 @@ export class FreestyleAdapter implements SandboxAdapter {
     } catch {
       return null;
     }
+  }
+
+  /**
+   * The SDK reads only whole files, so a capped read runs `head` in the VM
+   * instead, as the amika user like `fs.readFile`. One byte past the cap is
+   * enough to tell an over-limit file from one exactly at it.
+   */
+  private async downloadBytesCapped(
+    path: string,
+    maxBytes: number,
+  ): Promise<Uint8Array | null> {
+    const file = shellQuote(path);
+    let res: ExecResult;
+    try {
+      res = await this.exec(
+        `[ -f ${file} ] && [ -r ${file} ] || exit 3; head -c ${maxBytes + 1} -- ${file} | base64 -w0`,
+      );
+    } catch {
+      return null;
+    }
+    if (res.exitCode !== 0) return null;
+    const bytes = Buffer.from(res.stdout, "base64");
+    if (bytes.byteLength > maxBytes) {
+      throw new SandboxFileTooLargeError(path, maxBytes);
+    }
+    return bytes;
   }
 
   private async ensureParentDir(path: string): Promise<void> {

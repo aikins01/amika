@@ -267,6 +267,8 @@ describe("Sandbox methods delegate to capabilities", () => {
     await expect(sandbox.readFileBytes("/f")).resolves.toEqual(
       new TextEncoder().encode("contents"),
     );
+    await sandbox.readFileBytes("/f", { maxBytes: 5 });
+    expect(spies.read).toHaveBeenLastCalledWith("sb_1", "/f", { maxBytes: 5 });
     await sandbox.writeFile("/f", "data");
     expect(spies.write).toHaveBeenCalledWith("sb_1", "/f", "data");
     await sandbox.git!.clone({ homeDir: "/h", githubUrl: "https://g/r" });
