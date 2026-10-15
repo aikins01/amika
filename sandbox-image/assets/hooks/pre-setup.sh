@@ -114,14 +114,17 @@ fi
 # boot from a snapshot takes the slow path, until it is snapshotted again.
 own_by_amika() {
   chown -R amika:amika "$@" 2>/dev/null && return
-  local link target
+  local link target tmp
   # `find` passes on only the links whose owner `chown -h` cannot change.
   # Each is replaced by renaming a new link over it, so a link is never
-  # missing, even if making its replacement fails.
+  # missing, even if making its replacement fails. The new link gets a short
+  # name of its own: a suffix on a name already near the length limit would
+  # not fit.
   while IFS= read -r -d '' link; do
     target="$(readlink -- "$link")"
-    ln -sfn -- "$target" "$link.amika-relink"
-    mv -Tf -- "$link.amika-relink" "$link"
+    tmp="${link%/*}/.amika-relink-$$"
+    ln -sfn -- "$target" "$tmp"
+    mv -Tf -- "$tmp" "$link"
     chown -h -- amika:amika "$link"
   done < <(find "$@" -type l ! -exec chown -h amika:amika {} \; -print0 2>/dev/null)
   chown -R amika:amika "$@"
