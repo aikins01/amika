@@ -121,7 +121,10 @@ own_by_amika() {
   # name of its own: a suffix on a name already near the length limit would
   # not fit.
   while IFS= read -r -d '' link; do
-    target="$(readlink -- "$link")"
+    # Command substitution strips trailing newlines, which a target may
+    # end in; the `x` keeps them, and only readlink's own newline is cut.
+    target="$(readlink -- "$link"; printf x)"
+    target="${target%$'\nx'}"
     tmp="${link%/*}/.amika-relink-$$"
     ln -sfn -- "$target" "$tmp"
     mv -Tf -- "$tmp" "$link"
