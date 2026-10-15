@@ -59,9 +59,8 @@ function fullDef() {
       }),
     ),
     stream: vi.fn(async () => {}),
-    read: vi.fn(
-      async (): Promise<Uint8Array | null> =>
-        new TextEncoder().encode("contents"),
+    read: vi.fn(async (): Promise<Uint8Array | null> =>
+      new TextEncoder().encode("contents"),
     ),
     write: vi.fn(async () => {}),
     mint: vi.fn(async () => ({
@@ -580,12 +579,12 @@ describe("unsupported operations on a minimal provider", () => {
     );
   });
 
-  it("readFile decodes UTF-8 lossily while readFileBytes keeps the bytes", async () => {
+  it("readFile decodes UTF-8 lossily, dropping a BOM, while readFileBytes keeps the bytes", async () => {
     const { provider, spies } = fullProvider();
     const sandbox = provider.sandboxes.get("sb_1");
     const latin1 = Uint8Array.of(0xef, 0xbb, 0xbf, 0x63, 0x61, 0x66, 0xe9);
     spies.read.mockResolvedValue(latin1);
-    await expect(sandbox.readFile("/f")).resolves.toBe("\ufeffcaf\ufffd");
+    await expect(sandbox.readFile("/f")).resolves.toBe("caf\ufffd");
     await expect(sandbox.readFileBytes("/f")).resolves.toBe(latin1);
     spies.read.mockResolvedValue(null);
     await expect(sandbox.readFile("/f")).resolves.toBeNull();

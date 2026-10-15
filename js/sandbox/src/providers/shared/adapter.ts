@@ -67,10 +67,11 @@ export interface SandboxAdapter {
 
 /**
  * Decode file bytes as UTF-8, replacing invalid sequences with U+FFFD. A
- * leading BOM is kept, matching `Buffer#toString("utf8")`.
+ * leading BOM is dropped, as `Response#text()` does, so a config file saved
+ * with one still parses as JSON.
  */
 export function decodeUtf8(bytes: Uint8Array): string {
-  return new TextDecoder("utf-8", { ignoreBOM: true }).decode(bytes);
+  return new TextDecoder().decode(bytes);
 }
 
 /**
