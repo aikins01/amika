@@ -80,7 +80,8 @@ export default defineProvider(
     },
 
     files: {
-      read: (id, filePath) => readFreestyleFile(config, id, filePath),
+      read: (id, filePath, opts) =>
+        readFreestyleFile(config, id, filePath, opts),
       write: (id, filePath, content) =>
         writeFreestyleFile(config, id, filePath, content),
     },

@@ -113,7 +113,7 @@ export default defineProvider(
     },
 
     files: {
-      read: (id, filePath) => readVercelFile(config, id, filePath),
+      read: (id, filePath, opts) => readVercelFile(config, id, filePath, opts),
       write: (id, filePath, content) =>
         writeVercelFile(config, id, filePath, content),
     },

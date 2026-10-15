@@ -26,9 +26,11 @@ import {
   type SandboxService,
 } from "./types";
 import {
+  SandboxFileTooLargeError,
   type CloneRepoInput,
   type ExecCommandOptions,
   type ProviderSandboxListing,
+  type ReadFileBytesOptions,
   type SandboxExecResult,
   type StreamCommandHandlers,
 } from "../../provider";
@@ -36,6 +38,7 @@ import { executeCommand } from "./commands";
 import { cloneRepository } from "./configure";
 import type { SandboxStatus } from "../../../sandbox-status";
 import type { SandboxAdapter } from "../../shared/adapter";
+import { readCapped } from "../../shared/capped-read";
 
 export async function refreshDaytonaUrls(
   config: DaytonaConfig,
@@ -381,13 +384,15 @@ export async function readSandboxFile(
   config: DaytonaConfig,
   providerSandboxId: string,
   filePath: string,
-): Promise<string | null> {
+  opts?: ReadFileBytesOptions,
+): Promise<Uint8Array | null> {
   try {
     const daytona = getDaytonaClient(config);
     const sandbox = await daytona.get(providerSandboxId);
-    const content = await sandbox.fs.downloadFile(filePath);
-    return content.toString("utf8");
-  } catch {
+    const stream = await sandbox.fs.downloadFileStream(filePath);
+    return await readCapped(stream, filePath, opts?.maxBytes);
+  } catch (error) {
+    if (error instanceof SandboxFileTooLargeError) throw error;
     return null;
   }
 }

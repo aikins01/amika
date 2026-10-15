@@ -14,10 +14,13 @@
  */
 import type { Sandbox } from "@vercel/sandbox";
 import { shellQuote } from "../../../util/shell";
-import type {
-  ExecOptions,
-  ExecResult,
-  SandboxAdapter,
+import { SandboxFileTooLargeError } from "../../provider";
+import { readCapped } from "../../shared/capped-read";
+import {
+  decodeUtf8,
+  type ExecOptions,
+  type ExecResult,
+  type SandboxAdapter,
 } from "../../shared/adapter";
 
 /**
@@ -145,12 +148,27 @@ export class VercelAdapter implements SandboxAdapter {
   }
 
   async downloadFile(path: string): Promise<string | null> {
+    const bytes = await this.downloadBytes(path);
+    return bytes === null ? null : decodeUtf8(bytes);
+  }
+
+  /**
+   * {@link downloadFile} without the UTF-8 decode, refusing a file over
+   * `maxBytes` with {@link SandboxFileTooLargeError}.
+   */
+  async downloadBytes(
+    path: string,
+    maxBytes?: number,
+  ): Promise<Uint8Array | null> {
     try {
-      const buffer = await this.timed(`read ${path}`, () =>
-        this.sandbox.readFileToBuffer({ path }),
-      );
-      return buffer ? buffer.toString("utf8") : null;
-    } catch {
+      return await this.timed(`read ${path}`, async () => {
+        const stream = await this.sandbox.readFile({ path });
+        if (stream === null) return null;
+        // With no encoding set, the stream yields Buffers, never strings.
+        return readCapped(stream as AsyncIterable<Uint8Array>, path, maxBytes);
+      });
+    } catch (error) {
+      if (error instanceof SandboxFileTooLargeError) throw error;
       return null;
     }
   }

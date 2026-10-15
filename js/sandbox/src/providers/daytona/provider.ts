@@ -76,7 +76,7 @@ export default defineProvider(daytonaCapabilities, (config: DaytonaConfig) => ({
   },
 
   files: {
-    read: (id, filePath) => readSandboxFile(config, id, filePath),
+    read: (id, filePath, opts) => readSandboxFile(config, id, filePath, opts),
     write: (id, filePath, content) =>
       writeSandboxFile(config, id, filePath, content),
   },

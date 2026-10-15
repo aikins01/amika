@@ -59,7 +59,10 @@ function fullDef() {
       }),
     ),
     stream: vi.fn(async () => {}),
-    read: vi.fn(async () => "contents"),
+    read: vi.fn(
+      async (): Promise<Uint8Array | null> =>
+        new TextEncoder().encode("contents"),
+    ),
     write: vi.fn(async () => {}),
     mint: vi.fn(async () => ({
       token: "tok",
@@ -261,6 +264,11 @@ describe("Sandbox methods delegate to capabilities", () => {
     expect(spies.stream).toHaveBeenCalledWith("sb_1", "tail", handlers);
     await expect(sandbox.readFile("/f")).resolves.toBe("contents");
     expect(spies.read).toHaveBeenCalledWith("sb_1", "/f");
+    await expect(sandbox.readFileBytes("/f")).resolves.toEqual(
+      new TextEncoder().encode("contents"),
+    );
+    await sandbox.readFileBytes("/f", { maxBytes: 5 });
+    expect(spies.read).toHaveBeenLastCalledWith("sb_1", "/f", { maxBytes: 5 });
     await sandbox.writeFile("/f", "data");
     expect(spies.write).toHaveBeenCalledWith("sb_1", "/f", "data");
     await sandbox.git!.clone({ homeDir: "/h", githubUrl: "https://g/r" });
@@ -564,11 +572,26 @@ describe("unsupported operations on a minimal provider", () => {
     await expect(sandbox.readFile("/f")).rejects.toBeInstanceOf(
       SandboxProviderUnsupportedError,
     );
+    await expect(sandbox.readFileBytes("/f")).rejects.toBeInstanceOf(
+      SandboxProviderUnsupportedError,
+    );
     // delete stays available — it's the always-present capability.
     await expect(sandbox.delete()).resolves.toBeUndefined();
     await expect(provider.sandboxes.list()).rejects.toBeInstanceOf(
       SandboxProviderUnsupportedError,
     );
+  });
+
+  it("readFile decodes UTF-8 lossily, dropping a BOM, while readFileBytes keeps the bytes", async () => {
+    const { provider, spies } = fullProvider();
+    const sandbox = provider.sandboxes.get("sb_1");
+    const latin1 = Uint8Array.of(0xef, 0xbb, 0xbf, 0x63, 0x61, 0x66, 0xe9);
+    spies.read.mockResolvedValue(latin1);
+    await expect(sandbox.readFile("/f")).resolves.toBe("caf\ufffd");
+    await expect(sandbox.readFileBytes("/f")).resolves.toBe(latin1);
+    spies.read.mockResolvedValue(null);
+    await expect(sandbox.readFile("/f")).resolves.toBeNull();
+    await expect(sandbox.readFileBytes("/f")).resolves.toBeNull();
   });
 
   it("streamExec throws when exec has no stream", async () => {

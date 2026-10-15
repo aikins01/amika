@@ -54,7 +54,7 @@ export default defineProvider(
         streamE2bCommand(config, id, command, handlers),
     },
     files: {
-      read: (id, path) => readE2bFile(config, id, path),
+      read: (id, path, opts) => readE2bFile(config, id, path, opts),
       write: (id, path, content) => writeE2bFile(config, id, path, content),
     },
     services: {

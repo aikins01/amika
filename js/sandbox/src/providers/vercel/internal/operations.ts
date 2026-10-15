@@ -20,6 +20,7 @@ import {
   type CreatedProviderSandbox,
   type ExecCommandOptions,
   type ProviderSandboxListing,
+  type ReadFileBytesOptions,
   type RefreshUrlsResult,
   type SandboxExecResult,
   type SandboxService,
@@ -477,12 +478,13 @@ export async function readVercelFile(
   config: VercelConfig,
   providerSandboxId: string,
   filePath: string,
-): Promise<string | null> {
+  opts?: ReadFileBytesOptions,
+): Promise<Uint8Array | null> {
   const sandbox = await getVercelSandbox(config, providerSandboxId, {
     resume: true,
   });
   const adapter = new VercelAdapter(sandbox);
-  return adapter.downloadFile(filePath);
+  return adapter.downloadBytes(filePath, opts?.maxBytes);
 }
 
 export async function writeVercelFile(

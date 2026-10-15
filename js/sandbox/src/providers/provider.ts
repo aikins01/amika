@@ -38,6 +38,31 @@ export class SandboxProviderUnsupportedError extends Error {
 }
 
 /**
+ * Raised when a capped file read finds more than its `maxBytes`. The read
+ * stops at the cap, so a huge file, or a device like `/dev/zero` that never
+ * ends, costs at most `maxBytes + 1` bytes of memory.
+ */
+export class SandboxFileTooLargeError extends Error {
+  readonly path: string;
+  readonly maxBytes: number;
+  constructor(path: string, maxBytes: number) {
+    super(`File ${path} is larger than the ${maxBytes}-byte read limit`);
+    this.name = "SandboxFileTooLargeError";
+    this.path = path;
+    this.maxBytes = maxBytes;
+  }
+}
+
+/** Options for {@link Sandbox.readFileBytes}. */
+export interface ReadFileBytesOptions {
+  /**
+   * Refuse a file over this many bytes with {@link SandboxFileTooLargeError},
+   * enforced while reading, so a file that grows mid-read is still caught.
+   */
+  maxBytes?: number;
+}
+
+/**
  * Request to provision a new provider sandbox.
  *
  * Service identity and environment contents are caller-owned policy. Providers
@@ -624,7 +649,12 @@ export interface ExecCapability {
 
 /** Read/write files inside the sandbox. */
 export interface FileCapability {
-  read(providerSandboxId: string, filePath: string): Promise<string | null>;
+  /** The file's raw bytes; `null` when it does not exist. */
+  read(
+    providerSandboxId: string,
+    filePath: string,
+    opts?: ReadFileBytesOptions,
+  ): Promise<Uint8Array | null>;
   write(
     providerSandboxId: string,
     filePath: string,
@@ -825,7 +855,7 @@ export interface ServiceRestartContext {
 
 /**
  * A provisioned sandbox. Methods that map to a nullable capability
- * (start/stop/state → the sandbox run-state ops, exec/streamExec → exec, readFile/writeFile → files)
+ * (start/stop/state → the sandbox run-state ops, exec/streamExec → exec, readFile/readFileBytes/writeFile → files)
  * throw {@link SandboxProviderUnsupportedError} when the provider doesn't back
  * them; the sub-namespaces (`git`, `ssh`, `services`, `snapshots`) are `null`
  * in that case so callers can presence-check instead.
@@ -847,7 +877,13 @@ export interface Sandbox {
   getRuntimeState(): Promise<SandboxStatus>;
   exec(command: string, opts?: ExecCommandOptions): Promise<SandboxExecResult>;
   streamExec(command: string, handlers: StreamCommandHandlers): Promise<void>;
+  /** The file decoded as UTF-8; `null` when it does not exist. */
   readFile(filePath: string): Promise<string | null>;
+  /** The file's raw bytes; `null` when it does not exist. */
+  readFileBytes(
+    filePath: string,
+    opts?: ReadFileBytesOptions,
+  ): Promise<Uint8Array | null>;
   writeFile(filePath: string, content: Buffer | string): Promise<void>;
   /** Optional provider-native clone override; `null` → clone via adapter exec. */
   readonly git: SandboxGitNamespace | null;

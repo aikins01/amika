@@ -14,17 +14,17 @@ const vmSnapshot = vi.fn(); // vm.snapshot
 const vmStop = vi.fn(); // vm.stop
 const rootExec = vi.fn(); // rootVm.exec (sudo cmds, getent, ls verify)
 const userExec = vi.fn(); // amika-scoped exec (credential rm)
-const readTextFile = vi.fn(); // fs.readTextFile (/etc/environment)
+const readFile = vi.fn(); // fs.readFile (/etc/environment)
 const fakeUserVm = {
   exec: userExec,
-  fs: { readTextFile, writeTextFile: vi.fn(), writeFile: vi.fn() },
+  fs: { readFile, writeTextFile: vi.fn(), writeFile: vi.fn() },
 };
 const fakeVm = {
   snapshot: vmSnapshot,
   stop: vmStop,
   exec: rootExec,
   user: vi.fn(() => fakeUserVm),
-  fs: { readTextFile, writeTextFile: vi.fn(), writeFile: vi.fn() },
+  fs: { readFile, writeTextFile: vi.fn(), writeFile: vi.fn() },
 };
 const vmRef = vi.fn(() => fakeVm);
 const clientFetch = vi.fn();
@@ -60,7 +60,7 @@ beforeEach(() => {
   vmStop.mockReset();
   rootExec.mockReset();
   userExec.mockReset();
-  readTextFile.mockReset();
+  readFile.mockReset();
   vmRef.mockClear();
   clientFetch.mockReset();
 });
