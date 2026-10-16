@@ -68,8 +68,15 @@ func TestPresetPreSetup_ChownsUserManagedAmikaDirectories(t *testing.T) {
 	}
 
 	content := string(data)
-	if !strings.Contains(content, `chown -R amika:amika \`) {
-		t.Fatal("pre-setup.sh should chown user-managed amika directories to the amika user")
+	// Through own_by_amika, which is `chown -R` plus the repair of links a
+	// snapshot carries whose owner cannot be changed.
+	for _, want := range []string{
+		`chown -R amika:amika "$@"`,
+		`own_by_amika \`,
+	} {
+		if !strings.Contains(content, want) {
+			t.Fatalf("pre-setup.sh should chown user-managed amika directories to the amika user, missing %q", want)
+		}
 	}
 	for _, want := range []string{
 		`"$AMIKA_USER_STATE_DIR"`,

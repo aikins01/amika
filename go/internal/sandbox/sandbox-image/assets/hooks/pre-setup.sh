@@ -27,6 +27,40 @@ AMIKA_TMP_DIR="/tmp/amikad"
 AMIKA_USER_TMP_DIR="/tmp/amika"
 AMIKA_CWD_FILE="$AMIKA_STATE_DIR/agent-cwd"
 
+# Give amika everything under the given paths. A rig booted from a snapshot
+# can carry symlinks whose owner cannot be changed: in a machine made from a
+# smolvm pack, `chown -h` on a symlink the source machine created fails with
+# ENOENT though the link is fine (seen on smolvm 1.22 and 1.28). A plain
+# `chown -R` stops at the first one, so when it fails, recreate each such
+# link, which makes it an ordinary one, and run it again. Only a rig's first
+# boot from a snapshot takes the slow path, until it is snapshotted again.
+own_by_amika() {
+  chown -R amika:amika "$@" 2>/dev/null && return
+  local link
+  # `find` passes on only the links whose owner `chown -h` cannot change.
+  # Each is replaced by renaming a new link over it, so a link is never
+  # missing, even if making its replacement fails. The new link is made in a
+  # fresh directory beside it, so its name collides with nothing, and all of
+  # it relative to the link's directory, so no name or path grows past the
+  # limits the link itself is within.
+  while IFS= read -r -d '' link; do
+    (
+      cd -- "${link%/*}"
+      local name="${link##*/}" target tmpdir
+      # Command substitution strips trailing newlines, which a target may
+      # end in; the `x` keeps them, and only readlink's own newline is cut.
+      target="$(readlink -- "$name"; printf x)"
+      target="${target%$'\nx'}"
+      tmpdir="$(mktemp -d .amika-relink.XXXXXX)"
+      ln -s -- "$target" "$tmpdir/link"
+      mv -Tf -- "$tmpdir/link" "$name"
+      rmdir -- "$tmpdir"
+      chown -h -- amika:amika "$name"
+    )
+  done < <(find "$@" -type l ! -exec chown -h amika:amika {} \; -print0 2>/dev/null)
+  chown -R amika:amika "$@"
+}
+
 if [[ -n "${AMIKA_AGENT_CWD:-}" ]]; then
   amika_agent_cwd="$AMIKA_AGENT_CWD"
 elif [[ -f "$AMIKA_CWD_FILE" ]]; then
@@ -40,7 +74,7 @@ mkdir -p \
   "$AMIKA_LOG_DIR" "$AMIKA_USER_LOG_DIR" \
   "$AMIKA_RUN_DIR" "$AMIKA_USER_RUN_DIR" \
   "$AMIKA_TMP_DIR" "$AMIKA_USER_TMP_DIR"
-chown -R amika:amika \
+own_by_amika \
   "$AMIKA_USER_STATE_DIR" \
   "$AMIKA_USER_LOG_DIR" \
   "$AMIKA_USER_RUN_DIR" \
@@ -111,10 +145,10 @@ fi
 # the amika user from creating subdirectories.
 PNPM_HOME="/home/amika/.local/share/pnpm"
 mkdir -p "$PNPM_HOME"
-chown -R amika:amika /home/amika/.local
+own_by_amika /home/amika/.local
 cat > /usr/local/etc/amikad/setup/env.sh <<'ENVEOF'
 export PNPM_HOME="$HOME/.local/share/pnpm"
 export PATH="$PNPM_HOME:$PATH"
 ENVEOF
 
-sudo chown -R amika:amika /home/amika
+own_by_amika /home/amika
