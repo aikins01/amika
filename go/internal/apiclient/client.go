@@ -1428,8 +1428,10 @@ type Host struct {
 	OrgID string `json:"org_id"`
 	// TransportMode is how the host receives traffic: "listen" for a daemon
 	// that binds a port and registers the URL above, "tunnel" for one that
-	// binds nothing and dials an Amika gateway outbound. Empty against a
-	// control plane predating the field, which only served listening hosts.
+	// binds nothing and dials an Amika gateway outbound. Never empty: a
+	// control plane predating the field served only listening hosts, and
+	// UnmarshalJSON reads its silence as "listen" so that what this struct
+	// re-encodes for `-o json` is always a value the schema allows.
 	TransportMode string `json:"transport_mode"`
 	// Sizes are the sizes the host offers its rigs, keyed by the names the
 	// host chose. Its keys, not the cloud size vocabulary, are what
@@ -1439,6 +1441,27 @@ type Host struct {
 	CreatedAt string `json:"created_at"`
 	// UpdatedAt is when the host was last replaced or re-registered.
 	UpdatedAt string `json:"updated_at"`
+}
+
+// UnmarshalJSON decodes a host, reading an absent transport as "listen".
+//
+// The field is required in the current response schema, but a control plane
+// older than it omits the key entirely, and every host such a plane can serve
+// is a listening one. Filling it in here keeps the zero value out of the rest
+// of the CLI, so no caller has to decide what "" means, and keeps `-o json`
+// emitting a value the schema admits during the window where the two sides
+// are released separately.
+func (h *Host) UnmarshalJSON(data []byte) error {
+	type hostFields Host // no methods, so this does not recurse
+	var decoded hostFields
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		return err
+	}
+	if decoded.TransportMode == "" {
+		decoded.TransportMode = "listen"
+	}
+	*h = Host(decoded)
+	return nil
 }
 
 // HostSize is one size a host offers its rigs. Unlike the rest of the API,

@@ -11,6 +11,10 @@ export const registeredHostSchema = z.object({
   id: z.string(),
   hostname: z.string(),
   url: z.string().nullable(),
+  // How Amika reaches this host. Absent from a control plane older than the
+  // field, which only ever served listening hosts, so its silence is read as
+  // `listen` rather than left undefined for every caller to interpret.
+  transport_mode: z.enum(["listen", "tunnel"]).default("listen"),
 });
 export type RegisteredHost = z.infer<typeof registeredHostSchema>;
 

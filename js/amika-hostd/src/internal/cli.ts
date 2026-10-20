@@ -705,11 +705,13 @@ const FINISH_LATER =
   "Run `amika-hostd register-url <url>` to complete registration.";
 
 /**
- * Registration is complete once Amika knows the host's internet-facing URL.
- * Runs once the daemon is up: without a URL, ask the operator to expose the
- * daemon and enter the public URL (or say how to finish without a terminal);
- * with one, remind them where Amika expects to reach it. Returns false if
- * saving the URL failed; the daemon keeps running either way.
+ * Registration is complete once Amika knows how it reaches the host. For a
+ * tunnelled host that is already true the moment it is registered, since
+ * Amika assigns the address. For a listening one it means its
+ * internet-facing URL: without it, ask the operator to expose the daemon and
+ * enter the public URL (or say how to finish without a terminal); with it,
+ * remind them where Amika expects to reach it. Returns false if saving the
+ * URL failed; the daemon keeps running either way.
  */
 async function completeRegistration(
   config: RegistrationConfig,
@@ -718,6 +720,15 @@ async function completeRegistration(
   deps: CliDeps,
 ): Promise<boolean> {
   const local = localUrl(config.host, port);
+  // Amika assigns a tunnelled host's address, and `register-url` on one is
+  // refused, so there is nothing here for the operator to finish. Asking
+  // would walk them into the single action the transport forbids.
+  if (host.transport_mode === "tunnel") {
+    deps.out(
+      `Amika assigns this host's address; it needs no public URL and nothing exposed.`,
+    );
+    return true;
+  }
   if (host.url !== null) {
     deps.out(
       `Amika reaches this host at ${host.url}; make sure it is exposed there and forwards to ${local}.`,

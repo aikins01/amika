@@ -126,8 +126,9 @@ func TestHostListText(t *testing.T) {
 	// A host with no URL and no sizes still gets a row, with "-" in both —
 	// blank cells would hide the very thing the listing exists to show.
 	beta := rowFor(t, out, "beta.lan")
-	if got := strings.Fields(beta); len(got) != 3 || got[1] != "-" || got[2] != "-" {
-		t.Errorf("beta.lan row = %q, want its URL and sizes as \"-\"", beta)
+	if got := strings.Fields(beta); len(got) != 4 || got[1] != "listen" ||
+		got[2] != "-" || got[3] != "-" {
+		t.Errorf("beta.lan row = %q, want listen with its URL and sizes as \"-\"", beta)
 	}
 	// Ids are not a listing column; `host get` and -o json carry them.
 	if strings.Contains(out, "host_1") {
@@ -158,14 +159,26 @@ func TestHostListJSONEmitsTheAPIShape(t *testing.T) {
 			t.Errorf("got[0][%q] = %s, want %s", field, got[0][field], want)
 		}
 	}
-	// A consumer finds the hosts that have not finished registering with
-	// `select(.url == null)`, which an omitted key would quietly never match.
+	// A consumer finds the listening hosts that have not finished registering
+	// with `select(.transport_mode == "listen" and .url == null)`. An omitted
+	// url key would quietly never match, and a null url on its own also
+	// matches every tunnelled host, which is not waiting on anything.
 	raw, ok := got[1]["url"]
 	if !ok {
 		t.Fatalf("a URL-less host must carry an explicit null url: %s", buf.String())
 	}
 	if string(raw) != "null" {
 		t.Errorf("url = %s, want null", raw)
+	}
+	// The stub answers as a control plane older than `transport_mode` does,
+	// omitting it. The schema marks it required, so emitting "" here would
+	// put a value in `-o json` that no version of the API produces; it is
+	// read as the listener such a plane only ever serves.
+	for i := range got {
+		if string(got[i]["transport_mode"]) != `"listen"` {
+			t.Errorf("got[%d].transport_mode = %s, want \"listen\"",
+				i, got[i]["transport_mode"])
+		}
 	}
 }
 

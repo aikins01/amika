@@ -97,9 +97,9 @@ func runHostList(cmd *cobra.Command, _ []string) error {
 	// command group accepts one, and `host get` (or -o json) has the id, the
 	// timestamps, and the per-size resources for the one host you care about.
 	w := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 4, 2, ' ', 0)
-	fmt.Fprintln(w, "HOSTNAME\tURL\tSIZES")
+	fmt.Fprintln(w, "HOSTNAME\tTRANSPORT\tURL\tSIZES")
 	for _, h := range hosts {
-		fmt.Fprintf(w, "%s\t%s\t%s\n", h.Hostname, hostURL(h), hostSizeNames(h))
+		fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", h.Hostname, h.TransportMode, hostURL(h), hostSizeNames(h))
 	}
 	return w.Flush()
 }
@@ -125,6 +125,7 @@ func runHostGet(cmd *cobra.Command, args []string) error {
 	w := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 4, 2, ' ', 0)
 	fmt.Fprintf(w, "Hostname:\t%s\n", host.Hostname)
 	fmt.Fprintf(w, "ID:\t%s\n", host.ID)
+	fmt.Fprintf(w, "Transport:\t%s\n", host.TransportMode)
 	fmt.Fprintf(w, "URL:\t%s\n", hostURL(*host))
 	fmt.Fprintf(w, "Created:\t%s\n", host.CreatedAt)
 	fmt.Fprintf(w, "Updated:\t%s\n", host.UpdatedAt)
@@ -237,12 +238,17 @@ func runHostDelete(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
-// hostURL renders a host's URL for a table cell, as "-" while it has none.
+// hostURL renders a host's URL for a table cell. A listening host shows "-"
+// until it registers one; a tunnelled host has none to register, so it says
+// so rather than leaving the reader to guess which "-" this is.
 func hostURL(h apiclient.Host) string {
-	if h.URL == nil || *h.URL == "" {
-		return "-"
+	if h.URL != nil && *h.URL != "" {
+		return *h.URL
 	}
-	return *h.URL
+	if h.TransportMode == "tunnel" {
+		return "(assigned by Amika)"
+	}
+	return "-"
 }
 
 // hostSizeNames renders a host's size names for a table cell, as "-" when the

@@ -16,8 +16,9 @@ import (
 	"github.com/gofixpoint/amika/go/internal/output"
 )
 
-// newHostListClient serves a three-host listing: one ready, one listening
-// with no URL yet, and one tunnelled, which never has a URL at all.
+// newHostListClient serves four hosts: one ready, one listening with no URL
+// yet, one tunnelled (which never has a URL at all), and one carrying no
+// transport at all, as a control plane older than the field answers.
 func newHostListClient(t *testing.T) *apiclient.Client {
 	t.Helper()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -28,7 +29,9 @@ func newHostListClient(t *testing.T) *apiclient.Client {
 		  {"id":"host_2","hostname":"beta.lan","url":null,"org_id":"org_1",
 		   "sizes":{},"transport_mode":"listen","created_at":"","updated_at":""},
 		  {"id":"host_3","hostname":"delta.lan","url":null,"org_id":"org_1",
-		   "sizes":{},"transport_mode":"tunnel","created_at":"","updated_at":""}
+		   "sizes":{},"transport_mode":"tunnel","created_at":"","updated_at":""},
+		  {"id":"host_4","hostname":"legacy.lan","url":null,"org_id":"org_1",
+		   "sizes":{},"created_at":"","updated_at":""}
 		]`)
 	}))
 	t.Cleanup(srv.Close)
@@ -77,10 +80,13 @@ func TestResolveCreateHost(t *testing.T) {
 		}
 	})
 
-	t.Run("still refuses a listening host with no URL", func(t *testing.T) {
-		// A control plane that omits the field serves only listening hosts,
-		// so an absent mode must keep the old behaviour.
-		_, err := resolveCreateHost(client, "beta.lan")
+	t.Run("still refuses a host a control plane sent no transport for", func(t *testing.T) {
+		// The only combination today's API produces: no `transport_mode` and
+		// no URL. Such a plane serves listening hosts only, so this has to
+		// keep answering exactly as it did before the field existed. The
+		// `beta.lan` case above cannot show that -- it is sent an explicit
+		// mode, so it would survive the check being inverted.
+		_, err := resolveCreateHost(client, "legacy.lan")
 		if err == nil || !strings.Contains(err.Error(), "register-url") {
 			t.Errorf("err = %v, want one pointing at register-url", err)
 		}

@@ -57,7 +57,9 @@ amika host delete alpha.lan --force   # refused while rigs still run on it
 
 Hosts register themselves when `amika-hostd up` runs on the machine, which is
 also where the secret lives, so there is no way to add one from this CLI. A
-host listed without a URL has not finished registering and cannot take rigs.
+host's TRANSPORT says how to read its URL. A `listen` host without one has
+not finished registering and cannot take rigs; a `tunnel` host never has one,
+because Amika assigns its address, so its blank URL is normal.
 
 ## Agent credentials and secrets
 

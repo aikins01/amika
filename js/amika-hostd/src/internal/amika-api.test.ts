@@ -65,7 +65,15 @@ describe("registerHost", () => {
   ])("treats HTTP %i as created=%s", async (status, created) => {
     const fetcher = responding(Response.json(HOST, { status }));
     expect(await registerHost(API, INPUT, fetcher)).toEqual({
-      host: { id: "host_1", hostname: "builder", url: null },
+      // `HOST` carries no `transport_mode`, as a control plane older than
+      // the field answers; such a plane serves listening hosts only, so the
+      // schema reads its silence as `listen` rather than leaving it unset.
+      host: {
+        id: "host_1",
+        hostname: "builder",
+        url: null,
+        transport_mode: "listen",
+      },
       created,
     });
   });
@@ -183,6 +191,7 @@ describe("setHostUrl", () => {
       id: "host_1",
       hostname: "builder",
       url: "https://abc.ngrok.app",
+      transport_mode: "listen",
     });
     expect(fetcher).toHaveBeenCalledWith(
       "https://app.amika.dev/api/v0beta1/hosts/host_1",
