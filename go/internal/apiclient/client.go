@@ -1420,10 +1420,17 @@ type Host struct {
 	// Hostname is the name the host registered itself under.
 	Hostname string `json:"hostname"`
 	// URL is where the control plane reaches the host's daemon, or nil while
-	// registration is incomplete. Such a host cannot take a rig yet.
+	// a listening host's registration is incomplete. Always nil for a
+	// tunnelled host, whose address Amika assigns, so a nil URL on its own
+	// does not mean registration is unfinished. Read TransportMode for that.
 	URL *string `json:"url"`
 	// OrgID is the organization the host belongs to.
 	OrgID string `json:"org_id"`
+	// TransportMode is how the host receives traffic: "listen" for a daemon
+	// that binds a port and registers the URL above, "tunnel" for one that
+	// binds nothing and dials an Amika gateway outbound. Empty against a
+	// control plane predating the field, which only served listening hosts.
+	TransportMode string `json:"transport_mode"`
 	// Sizes are the sizes the host offers its rigs, keyed by the names the
 	// host chose. Its keys, not the cloud size vocabulary, are what
 	// `rig create --host` accepts for --size.

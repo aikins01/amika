@@ -335,6 +335,15 @@ func resolveCreateHost(client *apiclient.Client, ref string) (string, error) {
 		}
 		return "", err
 	}
+	// A tunnelled host has no URL by design and never will: Amika assigns its
+	// address, and `register-url` on one is refused. Checking the URL here
+	// would hand its owner the single instruction the transport forbids, so
+	// the host goes through and the control plane answers for its own
+	// reachability. An older control plane sends no mode, and the hosts it
+	// serves are all listening ones, so the check below still applies there.
+	if host.TransportMode == "tunnel" {
+		return host.ID, nil
+	}
 	// The API stores a URL only after validating it, so in practice this is
 	// the nil case; the empty check is belt and braces against a host row
 	// that somehow carries one.

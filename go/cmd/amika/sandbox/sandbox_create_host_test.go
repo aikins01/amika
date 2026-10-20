@@ -16,7 +16,8 @@ import (
 	"github.com/gofixpoint/amika/go/internal/output"
 )
 
-// newHostListClient serves a two-host listing: one ready, one with no URL.
+// newHostListClient serves a three-host listing: one ready, one listening
+// with no URL yet, and one tunnelled, which never has a URL at all.
 func newHostListClient(t *testing.T) *apiclient.Client {
 	t.Helper()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -25,7 +26,9 @@ func newHostListClient(t *testing.T) *apiclient.Client {
 		  {"id":"host_1","hostname":"alpha.lan","url":"https://alpha.example","org_id":"org_1",
 		   "sizes":{},"created_at":"","updated_at":""},
 		  {"id":"host_2","hostname":"beta.lan","url":null,"org_id":"org_1",
-		   "sizes":{},"created_at":"","updated_at":""}
+		   "sizes":{},"transport_mode":"listen","created_at":"","updated_at":""},
+		  {"id":"host_3","hostname":"delta.lan","url":null,"org_id":"org_1",
+		   "sizes":{},"transport_mode":"tunnel","created_at":"","updated_at":""}
 		]`)
 	}))
 	t.Cleanup(srv.Close)
@@ -58,6 +61,25 @@ func TestResolveCreateHost(t *testing.T) {
 	})
 
 	t.Run("refuses a host with no URL", func(t *testing.T) {
+		_, err := resolveCreateHost(client, "beta.lan")
+		if err == nil || !strings.Contains(err.Error(), "register-url") {
+			t.Errorf("err = %v, want one pointing at register-url", err)
+		}
+	})
+
+	t.Run("takes a tunnelled host, which has no URL to register", func(t *testing.T) {
+		// Reading the URL alone would answer "run `amika-hostd register-url`",
+		// which the API refuses for this host. Its reachability is the
+		// control plane's to report, not something to guess at from here.
+		id, err := resolveCreateHost(client, "delta.lan")
+		if err != nil || id != "host_3" {
+			t.Errorf("got %q, %v; want host_3 and no error", id, err)
+		}
+	})
+
+	t.Run("still refuses a listening host with no URL", func(t *testing.T) {
+		// A control plane that omits the field serves only listening hosts,
+		// so an absent mode must keep the old behaviour.
 		_, err := resolveCreateHost(client, "beta.lan")
 		if err == nil || !strings.Contains(err.Error(), "register-url") {
 			t.Errorf("err = %v, want one pointing at register-url", err)
