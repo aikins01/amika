@@ -238,17 +238,16 @@ func runHostDelete(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
-// hostURL renders a host's URL for a table cell. A listening host shows "-"
-// until it registers one; a tunnelled host has none to register, so it says
-// so rather than leaving the reader to guess which "-" this is.
+// hostURL renders a host's URL for a table cell, as "-" while it has none.
+// Which kind of "-" it is -- a listening host that has not registered one
+// yet, or a tunnelled host that never will -- is the TRANSPORT column's to
+// say, so that every cell here stays free of spaces and `awk '{print $3}'`
+// keeps working.
 func hostURL(h apiclient.Host) string {
-	if h.URL != nil && *h.URL != "" {
-		return *h.URL
+	if h.URL == nil || *h.URL == "" {
+		return "-"
 	}
-	if h.TransportMode == "tunnel" {
-		return "(assigned by Amika)"
-	}
-	return "-"
+	return *h.URL
 }
 
 // hostSizeNames renders a host's size names for a table cell, as "-" when the

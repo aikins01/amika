@@ -80,8 +80,10 @@ Commands:
                       daemon in the background (running setup first if needed)
   down                Stop the daemon and its smolvm, which stops every machine
   serve               Run the HTTP server in the foreground without registering
-  register-url <url>  Set this host's internet-facing URL (e.g. an ngrok or
-                      Cloudflare Tunnel URL) to complete registration
+  register-url <url>  Set a listening host's internet-facing URL (e.g. an
+                      ngrok or Cloudflare Tunnel URL) to complete its
+                      registration. A host whose address Amika assigns takes
+                      none
 
 Options:
   --non-interactive
@@ -269,7 +271,16 @@ export async function runCli(
           placedSecrets(withSecrets(resolved, deps), deps),
           REGISTRATION_SETTINGS,
         );
-        await saveUrl(config, await register(config, deps), parsed.url, deps);
+        const host = await register(config, deps);
+        // The API refuses this for a host whose address it assigns, so say
+        // which host and why rather than relaying a 400 the operator has to
+        // decode. Same "not a listener" test as `up`.
+        if (host.transport_mode !== "listen") {
+          throw new AmikaApiError(
+            `Amika assigns the address of host ${host.hostname}; it takes no registered URL.`,
+          );
+        }
+        await saveUrl(config, host, parsed.url, deps);
         break;
       }
       default:
@@ -720,10 +731,13 @@ async function completeRegistration(
   deps: CliDeps,
 ): Promise<boolean> {
   const local = localUrl(config.host, port);
-  // Amika assigns a tunnelled host's address, and `register-url` on one is
-  // refused, so there is nothing here for the operator to finish. Asking
-  // would walk them into the single action the transport forbids.
-  if (host.transport_mode === "tunnel") {
+  // Only a listening host registers a URL. Amika assigns the address of one
+  // it reaches any other way, and `register-url` on such a host is refused,
+  // so there is nothing here for the operator to finish; asking would walk
+  // them into the single action the transport forbids. Tested as "not a
+  // listener" so a transport added later is left to the control plane
+  // rather than being handed that same advice.
+  if (host.transport_mode !== "listen") {
     deps.out(
       `Amika assigns this host's address; it needs no public URL and nothing exposed.`,
     );

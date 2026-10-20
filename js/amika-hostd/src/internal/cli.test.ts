@@ -547,6 +547,21 @@ describe("completing registration", () => {
   const LATER =
     "Run `amika-hostd register-url <url>` to complete registration.";
 
+  it("register-url refuses a tunnelled host before calling Amika", async () => {
+    // The API would refuse it anyway; relaying a bare 400 leaves the
+    // operator decoding why. Name the host and the reason instead.
+    const h = harness();
+    h.deps.registerHost.mockResolvedValue({
+      host: TUNNEL_HOST,
+      created: false,
+    });
+    expect(
+      await runCli(["register-url", "https://abc.ngrok.app"], h.deps),
+    ).toBe(1);
+    expect(h.deps.setHostUrl).not.toHaveBeenCalled();
+    expect(h.err.join("\n")).toContain("assigns the address of host builder");
+  });
+
   it("`up` asks a tunnelled host for nothing: it has no URL to register", async () => {
     // Amika assigns the address, and `register-url` on such a host is
     // refused, so prompting would walk the operator into the one action the

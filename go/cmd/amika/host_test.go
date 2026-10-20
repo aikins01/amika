@@ -16,7 +16,9 @@ import (
 )
 
 // hostsBody is the two-host listing the host-command tests run against: one
-// ready host with a size, one still waiting for its URL.
+// ready host with a size, one still waiting for its URL, and one tunnelled,
+// which never has one. Neither of the first two carries a transport, as a
+// control plane older than the field answers.
 func hostsBody() []map[string]any {
 	return []map[string]any{
 		{
@@ -32,6 +34,11 @@ func hostsBody() []map[string]any {
 			"id": "host_2", "hostname": "beta.lan", "url": nil, "org_id": "org_1",
 			"sizes":      map[string]any{},
 			"created_at": "2026-01-03T00:00:00Z", "updated_at": "2026-01-03T00:00:00Z",
+		},
+		{
+			"id": "host_3", "hostname": "delta.lan", "url": nil, "org_id": "org_1",
+			"sizes": map[string]any{}, "transport_mode": "tunnel",
+			"created_at": "2026-01-04T00:00:00Z", "updated_at": "2026-01-04T00:00:00Z",
 		},
 	}
 }
@@ -130,6 +137,20 @@ func TestHostListText(t *testing.T) {
 		got[2] != "-" || got[3] != "-" {
 		t.Errorf("beta.lan row = %q, want listen with its URL and sizes as \"-\"", beta)
 	}
+	// A tunnelled host shows the same "-" as a listener that never
+	// registered; TRANSPORT is what tells them apart, so the column has to
+	// be there and has to be right.
+	delta := rowFor(t, out, "delta.lan")
+	if got := strings.Fields(delta); len(got) != 4 || got[1] != "tunnel" ||
+		got[2] != "-" {
+		t.Errorf("delta.lan row = %q, want tunnel with its URL as \"-\"", delta)
+	}
+	// Every cell splits on whitespace, which `rowFor` above and anyone
+	// piping this into awk both rely on. A cell containing a space would
+	// silently turn one column into two.
+	if !strings.Contains(out, "TRANSPORT") {
+		t.Errorf("no TRANSPORT column in %q", out)
+	}
 	// Ids are not a listing column; `host get` and -o json carry them.
 	if strings.Contains(out, "host_1") {
 		t.Errorf("listing should not carry ids: %q", out)
@@ -151,8 +172,8 @@ func TestHostListJSONEmitsTheAPIShape(t *testing.T) {
 	if err := json.Unmarshal(buf.Bytes(), &got); err != nil {
 		t.Fatalf("decoding %q: %v", buf.String(), err)
 	}
-	if len(got) != 2 {
-		t.Fatalf("got %d hosts, want 2: %s", len(got), buf.String())
+	if len(got) != 3 {
+		t.Fatalf("got %d hosts, want 3: %s", len(got), buf.String())
 	}
 	for field, want := range map[string]string{"id": `"host_1"`, "org_id": `"org_1"`} {
 		if string(got[0][field]) != want {
@@ -174,10 +195,10 @@ func TestHostListJSONEmitsTheAPIShape(t *testing.T) {
 	// omitting it. The schema marks it required, so emitting "" here would
 	// put a value in `-o json` that no version of the API produces; it is
 	// read as the listener such a plane only ever serves.
-	for i := range got {
-		if string(got[i]["transport_mode"]) != `"listen"` {
-			t.Errorf("got[%d].transport_mode = %s, want \"listen\"",
-				i, got[i]["transport_mode"])
+	for i, want := range []string{`"listen"`, `"listen"`, `"tunnel"`} {
+		if string(got[i]["transport_mode"]) != want {
+			t.Errorf("got[%d].transport_mode = %s, want %s",
+				i, got[i]["transport_mode"], want)
 		}
 	}
 }
@@ -200,6 +221,26 @@ func TestHostListJSONEmitsAnEmptyArray(t *testing.T) {
 	}
 	if got := strings.TrimSpace(buf.String()); got != "[]" {
 		t.Errorf("output = %q, want []", got)
+	}
+}
+
+func TestHostGetShowsTheTransport(t *testing.T) {
+	stubHostAPI(t)
+
+	// `host get` is where an operator looks when the listing's "-" leaves
+	// them unsure, so it has to name the transport rather than make them
+	// infer it from a URL that is absent for two different reasons.
+	for _, tc := range []struct{ host, want string }{
+		{"delta.lan", "Transport:  tunnel"},
+		{"alpha.lan", "Transport:  listen"},
+	} {
+		c, buf := newHostCmd(runHostGet, nil)
+		if err := runHostGet(c, []string{tc.host}); err != nil {
+			t.Fatalf("runHostGet(%s): %v", tc.host, err)
+		}
+		if !strings.Contains(buf.String(), tc.want) {
+			t.Errorf("%s output %q missing %q", tc.host, buf.String(), tc.want)
+		}
 	}
 }
 

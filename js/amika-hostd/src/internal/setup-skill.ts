@@ -134,9 +134,13 @@ not done; the message names what is missing.
 
 ## 4. Make the host reachable
 
-Amika reaches the host over the internet. If \`up\` printed "To complete
-registration", expose the daemon's local address with an HTTPS tunnel the
-operator approves, such as \`ngrok http ${localUrl}\` or
+If \`up\` said Amika assigns this host's address, this step is already done:
+Amika reaches the host over its own gateway, there is no URL to give it, and
+\`register-url\` on such a host is refused. Skip to step 5.
+
+Otherwise Amika reaches the host over the internet. If \`up\` printed "To
+complete registration", expose the daemon's local address with an HTTPS
+tunnel the operator approves, such as \`ngrok http ${localUrl}\` or
 \`cloudflared tunnel --url ${localUrl}\`, then give Amika the tunnel's
 public URL:
 
@@ -149,7 +153,8 @@ URL still forwards to the daemon.
 
 - The daemon's log: ${logFile}
 - With the \`amika\` CLI signed in to the same organization,
-  \`amika host get <hostname>\` shows the host and its URL.
+  \`amika host get <hostname>\` shows the host, its transport and its URL. A
+  tunnelled host shows no URL; Amika assigns its address.
 
 ## Stopping
 

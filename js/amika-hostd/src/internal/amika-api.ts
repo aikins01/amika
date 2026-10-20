@@ -14,7 +14,13 @@ export const registeredHostSchema = z.object({
   // How Amika reaches this host. Absent from a control plane older than the
   // field, which only ever served listening hosts, so its silence is read as
   // `listen` rather than left undefined for every caller to interpret.
-  transport_mode: z.enum(["listen", "tunnel"]).default("listen"),
+  //
+  // A plain string, not an enum: the schema is shared by every call, so
+  // rejecting an unrecognised transport would fail `up`, `register-url` and
+  // `setup` outright against a control plane that has added one -- including
+  // for the listening hosts on it. Callers test for the transport they
+  // handle and leave the rest to the control plane, as the Go client does.
+  transport_mode: z.string().default("listen"),
 });
 export type RegisteredHost = z.infer<typeof registeredHostSchema>;
 
