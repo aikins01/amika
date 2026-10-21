@@ -80,8 +80,10 @@ Commands:
                       daemon in the background (running setup first if needed)
   down                Stop the daemon and its smolvm, which stops every machine
   serve               Run the HTTP server in the foreground without registering
-  register-url <url>  Set this host's internet-facing URL (e.g. an ngrok or
-                      Cloudflare Tunnel URL) to complete registration
+  register-url <url>  Set a listening host's internet-facing URL (e.g. an
+                      ngrok or Cloudflare Tunnel URL) to complete its
+                      registration. A host whose address Amika assigns takes
+                      none
 
 Options:
   --non-interactive
@@ -269,7 +271,16 @@ export async function runCli(
           placedSecrets(withSecrets(resolved, deps), deps),
           REGISTRATION_SETTINGS,
         );
-        await saveUrl(config, await register(config, deps), parsed.url, deps);
+        const host = await register(config, deps);
+        // The API refuses this for a host whose address it assigns, so say
+        // which host and why rather than relaying a 400 the operator has to
+        // decode. Same "not a listener" test as `up`.
+        if (host.transport_mode !== "listen") {
+          throw new AmikaApiError(
+            `Amika assigns the address of host ${host.hostname}; it takes no registered URL.`,
+          );
+        }
+        await saveUrl(config, host, parsed.url, deps);
         break;
       }
       default:
@@ -705,11 +716,13 @@ const FINISH_LATER =
   "Run `amika-hostd register-url <url>` to complete registration.";
 
 /**
- * Registration is complete once Amika knows the host's internet-facing URL.
- * Runs once the daemon is up: without a URL, ask the operator to expose the
- * daemon and enter the public URL (or say how to finish without a terminal);
- * with one, remind them where Amika expects to reach it. Returns false if
- * saving the URL failed; the daemon keeps running either way.
+ * Registration is complete once Amika knows how it reaches the host. For a
+ * tunnelled host that is already true the moment it is registered, since
+ * Amika assigns the address. For a listening one it means its
+ * internet-facing URL: without it, ask the operator to expose the daemon and
+ * enter the public URL (or say how to finish without a terminal); with it,
+ * remind them where Amika expects to reach it. Returns false if saving the
+ * URL failed; the daemon keeps running either way.
  */
 async function completeRegistration(
   config: RegistrationConfig,
@@ -718,6 +731,24 @@ async function completeRegistration(
   deps: CliDeps,
 ): Promise<boolean> {
   const local = localUrl(config.host, port);
+  // Only a listening host registers a URL. Amika assigns the address of one
+  // it reaches any other way, and `register-url` on such a host is refused,
+  // so there is nothing here for the operator to finish; asking would walk
+  // them into the single action the transport forbids. Tested as "not a
+  // listener" so a transport added later is left to the control plane
+  // rather than being handed that same advice.
+  if (host.transport_mode !== "listen") {
+    deps.out(
+      `Amika assigns this host's address; it needs no public URL and nothing exposed.`,
+    );
+    // Not the same as saying the host is reachable. This daemon serves
+    // locally and has no way to know whether a gateway has picked it up, so
+    // it does not claim one has.
+    deps.out(
+      `Amika reports whether it can reach the host; this daemon does not.`,
+    );
+    return true;
+  }
   if (host.url !== null) {
     deps.out(
       `Amika reaches this host at ${host.url}; make sure it is exposed there and forwards to ${local}.`,

@@ -48,7 +48,8 @@ There is no `--host` value that selects Amika Cloud; omit the flag. With
 refused.
 
 ```bash
-amika host list                       # HOSTNAME, URL, SIZES ("hosts" is an alias)
+amika host list                       # HOSTNAME, TRANSPORT, URL, SIZES
+amika hosts list                      # "hosts" is an alias for "host"
 amika host list -o json               # ids, timestamps, per-size resources
 amika host get alpha.lan              # the sizes that host offers
 amika rig create --host alpha.lan --size small
@@ -57,7 +58,10 @@ amika host delete alpha.lan --force   # refused while rigs still run on it
 
 Hosts register themselves when `amika-hostd up` runs on the machine, which is
 also where the secret lives, so there is no way to add one from this CLI. A
-host listed without a URL has not finished registering and cannot take rigs.
+host's TRANSPORT says how to read a `-` in its URL. A `listen` host showing
+`-` has not finished registering and cannot take rigs; a `tunnel` host always
+shows `-`, because Amika assigns its address and there is nothing to
+register, so it says nothing about whether the host is ready.
 
 ## Agent credentials and secrets
 

@@ -335,6 +335,19 @@ func resolveCreateHost(client *apiclient.Client, ref string) (string, error) {
 		}
 		return "", err
 	}
+	// Only a listening host registers a URL, so only a listening host can be
+	// missing one. A tunnelled host never has one: Amika assigns its address
+	// and `register-url` on it is refused, so checking here would hand its
+	// owner the single instruction the transport forbids. Any transport
+	// added later is in the same position, which is why this tests for the
+	// one mode that owns a URL rather than listing the ones that do not.
+	// The control plane answers for its own reachability either way.
+	//
+	// A control plane predating the field sends none, and `UnmarshalJSON`
+	// reads that as "listen", so the check below still applies there.
+	if host.TransportMode != "listen" {
+		return host.ID, nil
+	}
 	// The API stores a URL only after validating it, so in practice this is
 	// the nil case; the empty check is belt and braces against a host row
 	// that somehow carries one.

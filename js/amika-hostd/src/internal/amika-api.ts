@@ -11,10 +11,23 @@ export const registeredHostSchema = z.object({
   id: z.string(),
   hostname: z.string(),
   url: z.string().nullable(),
+  // How Amika reaches this host. Absent from a control plane older than the
+  // field, which only ever served listening hosts, so its silence is read as
+  // `listen` rather than left undefined for every caller to interpret.
+  //
+  // A plain string, not an enum: the schema is shared by every call, so
+  // rejecting an unrecognised transport would fail `up`, `register-url` and
+  // `setup` outright against a control plane that has added one, including
+  // for the listening hosts on it. Callers test for the transport they
+  // handle and leave the rest to the control plane, as the Go client does.
+  transport_mode: z.string().default("listen"),
 });
 export type RegisteredHost = z.infer<typeof registeredHostSchema>;
 
-/** An Amika API failure; the message is safe to print. */
+/**
+ * An Amika API failure, or a request this daemon refuses on the API's behalf
+ * because the answer is already known. The message is safe to print.
+ */
 export class AmikaApiError extends Error {
   override name = "AmikaApiError";
 }

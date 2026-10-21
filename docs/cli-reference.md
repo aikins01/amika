@@ -442,11 +442,11 @@ amika host delete alpha.lan
 
 ### `amika host list`
 
-Lists `HOSTNAME`, `URL`, and `SIZES`. A host shows `-` for a URL it has not registered yet, and such a host cannot take rigs. Ids and timestamps are not columns: a host is addressed by hostname wherever these commands take one, and `amika host get` or `-o json` has the rest for the host you care about.
+Lists `HOSTNAME`, `TRANSPORT`, `URL`, and `SIZES`. Read the `-` in `URL` against `TRANSPORT`: a `listen` host is reached at the URL it registered and cannot take rigs until it has one, while a `tunnel` host dials Amika instead, so Amika assigns its address and it has no URL to register. Ids and timestamps are not columns: a host is addressed by hostname wherever these commands take one, and `amika host get` or `-o json` has the rest for the host you care about.
 
 ### `amika host get <hostname-or-id>`
 
-Shows one host's details and the sizes it offers its rigs. Those size names, not the cloud size vocabulary, are what `rig create --host ... --size ...` accepts.
+Shows one host's details and the sizes it offers its rigs, including its `Transport`: a `tunnel` host shows no URL, because Amika assigns its address and there is none to register. Those size names, not the cloud size vocabulary, are what `rig create --host ... --size ...` accepts.
 
 ### `amika host delete <hostname-or-id> [...]`
 

@@ -16,7 +16,9 @@ import (
 	"github.com/gofixpoint/amika/go/internal/output"
 )
 
-// newHostListClient serves a two-host listing: one ready, one with no URL.
+// newHostListClient serves four hosts: one ready, one listening with no URL
+// yet, one tunnelled (which never has a URL at all), and one carrying no
+// transport at all, as a control plane older than the field answers.
 func newHostListClient(t *testing.T) *apiclient.Client {
 	t.Helper()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -25,6 +27,10 @@ func newHostListClient(t *testing.T) *apiclient.Client {
 		  {"id":"host_1","hostname":"alpha.lan","url":"https://alpha.example","org_id":"org_1",
 		   "sizes":{},"created_at":"","updated_at":""},
 		  {"id":"host_2","hostname":"beta.lan","url":null,"org_id":"org_1",
+		   "sizes":{},"transport_mode":"listen","created_at":"","updated_at":""},
+		  {"id":"host_3","hostname":"delta.lan","url":null,"org_id":"org_1",
+		   "sizes":{},"transport_mode":"tunnel","created_at":"","updated_at":""},
+		  {"id":"host_4","hostname":"legacy.lan","url":null,"org_id":"org_1",
 		   "sizes":{},"created_at":"","updated_at":""}
 		]`)
 	}))
@@ -59,6 +65,28 @@ func TestResolveCreateHost(t *testing.T) {
 
 	t.Run("refuses a host with no URL", func(t *testing.T) {
 		_, err := resolveCreateHost(client, "beta.lan")
+		if err == nil || !strings.Contains(err.Error(), "register-url") {
+			t.Errorf("err = %v, want one pointing at register-url", err)
+		}
+	})
+
+	t.Run("takes a tunnelled host, which has no URL to register", func(t *testing.T) {
+		// Reading the URL alone would answer "run `amika-hostd register-url`",
+		// which the API refuses for this host. Its reachability is the
+		// control plane's to report, not something to guess at from here.
+		id, err := resolveCreateHost(client, "delta.lan")
+		if err != nil || id != "host_3" {
+			t.Errorf("got %q, %v; want host_3 and no error", id, err)
+		}
+	})
+
+	t.Run("still refuses a host a control plane sent no transport for", func(t *testing.T) {
+		// The only combination today's API produces: no `transport_mode` and
+		// no URL. Such a plane serves listening hosts only, so this has to
+		// keep answering exactly as it did before the field existed. The
+		// `beta.lan` case above cannot show that: it is sent an explicit
+		// mode, so it would survive the check being inverted.
+		_, err := resolveCreateHost(client, "legacy.lan")
 		if err == nil || !strings.Contains(err.Error(), "register-url") {
 			t.Errorf("err = %v, want one pointing at register-url", err)
 		}

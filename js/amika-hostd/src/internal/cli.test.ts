@@ -37,8 +37,15 @@ const HOST = {
   id: "host_1",
   hostname: "builder",
   url: "https://builder.example.com" as string | null,
+  transport_mode: "listen" as "listen" | "tunnel",
 };
 const NEW_HOST = { ...HOST, url: null };
+/** A host Amika reaches over its own gateway, so it registers no URL. */
+const TUNNEL_HOST = {
+  ...HOST,
+  url: null,
+  transport_mode: "tunnel" as const,
+};
 
 /** A state directory whose pidfile names a (pretend-live) daemon. */
 function pidDir(): string {
@@ -539,6 +546,52 @@ describe("completing registration", () => {
     "To complete registration, expose http://127.0.0.1:4000 to the internet (e.g. `ngrok http 4000` or `cloudflared tunnel --url http://127.0.0.1:4000`) and give Amika its public URL.";
   const LATER =
     "Run `amika-hostd register-url <url>` to complete registration.";
+
+  it("register-url refuses a tunnelled host instead of relaying a 400", async () => {
+    // The API would refuse it anyway; relaying a bare 400 leaves the
+    // operator decoding why. Name the host and the reason instead. The
+    // idempotent register still runs, since that is how the transport is
+    // learned; it is only the URL that never goes out.
+    const h = harness();
+    h.deps.registerHost.mockResolvedValue({
+      host: TUNNEL_HOST,
+      created: false,
+    });
+    expect(
+      await runCli(["register-url", "https://abc.ngrok.app"], h.deps),
+    ).toBe(1);
+    expect(h.deps.registerHost).toHaveBeenCalled();
+    expect(h.deps.setHostUrl).not.toHaveBeenCalled();
+    expect(h.err.join("\n")).toContain("assigns the address of host builder");
+  });
+
+  it("`up` asks a tunnelled host for nothing: it has no URL to register", async () => {
+    // Amika assigns the address, and `register-url` on such a host is
+    // refused, so prompting would walk the operator into the one action the
+    // transport forbids and then fail them for taking it.
+    const h = harness();
+    h.deps.registerHost.mockResolvedValue({
+      host: TUNNEL_HOST,
+      created: true,
+    });
+    const prompt = vi.fn(async (_question: string) => "https://nope.example");
+    const deps = { ...h.deps, prompt };
+
+    expect(await runCli(["up"], deps)).toBe(0);
+    expect(prompt).not.toHaveBeenCalled();
+    expect(deps.setHostUrl).not.toHaveBeenCalled();
+    expect(h.out.join("\n")).not.toContain("register-url");
+    expect(h.out.join("\n")).not.toContain("ngrok");
+    expect(h.out).toContain(
+      "Amika assigns this host's address; it needs no public URL and nothing exposed.",
+    );
+    // ...without claiming the host is reachable. Nothing in this daemon
+    // opens the outbound connection, so saying the operator is done would
+    // promise something it cannot see.
+    expect(h.out).toContain(
+      "Amika reports whether it can reach the host; this daemon does not.",
+    );
+  });
 
   it("`up` starts the daemon, then asks for the URL, retrying until valid", async () => {
     const { deps, out, err } = unregistered([

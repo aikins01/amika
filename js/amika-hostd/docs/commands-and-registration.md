@@ -32,7 +32,8 @@ with `node:util` `parseArgs` and takes every side effect as a dependency.
 - `amika-hostd down` sends `SIGTERM` to the daemon named by the pidfile and
   waits for it to exit, which includes stopping smolvm. It needs no
   configuration.
-- `amika-hostd register-url <url>` records the host's public URL and exits.
+- `amika-hostd register-url <url>` records a listening host's public URL and
+  exits. On a host whose address Amika assigns it refuses instead.
 
 ## Registration
 
@@ -57,12 +58,24 @@ without `AMIKA_API_KEY`/`AMIKA_HOSTD_API_KEY`: it only serves, so the
 background daemon never holds the API key. `up` checks the pidfile before
 registering, so a second `up` fails without calling Amika.
 
-Registration is complete once Amika knows the host's internet-facing URL (an
-ngrok or Cloudflare Tunnel URL, for example). `up` runs in this order: resolve
-config, register the hostname and secret, start the daemon (background, or
-`--fg`), then complete registration. If the host has no URL and stdin and
-stdout are both terminals, `up` asks the operator to expose the now-running
-daemon and enter its public URL, re-asking on an invalid URL. A blank answer or
+Registration is complete once Amika knows how it reaches the host. `up` runs
+in this order: resolve config, register the hostname and secret, start the
+daemon (background, or `--fg`), then complete registration.
+
+A host Amika reaches over its own gateway (`transport_mode: "tunnel"`) is
+already complete when it is registered: Amika assigns the address, there is
+no URL to give it, and `register-url` on such a host is refused by the daemon
+before it sends one, as the API would refuse it too. `up` says so and asks
+nothing. Anything that is not a listener is treated this way, so a transport
+added later is left for the control plane to answer for rather than being
+asked to expose a port. Complete is not the same as reachable: this daemon
+only serves locally and opens no outbound connection, so whether Amika can
+reach such a host is the control plane's to report, and `up` says so.
+
+For a listening host, completion means its internet-facing URL (an ngrok or
+Cloudflare Tunnel URL, for example). If it has no URL and stdin and stdout
+are both terminals, `up` asks the operator to expose the now-running daemon
+and enter its public URL, re-asking on an invalid URL. A blank answer or
 end of input (Ctrl-D) skips it. Ctrl-C exits 130: a background daemon keeps
 running, while `--fg` stops. A failed save is reported and the daemon keeps
 running (`up` exits 1 in the background). Without a terminal it prints how to
@@ -72,9 +85,13 @@ operator that Amika expects to reach it there.
 `amika-hostd register-url <url>` sets the URL from the same configuration as
 `up`: it registers idempotently to learn the host's id, then sends
 `PUT /api/v0beta1/hosts/{id}` with the hostname and URL and no secret, so the
-stored secret is kept. Only absolute http(s) URLs without credentials are
-accepted; a bare origin is normalized without its trailing slash, and a path is
-kept.
+stored secret is kept. If that register comes back as anything but a listener,
+it refuses by name ("Amika assigns the address of host ...") and never sends
+the URL, rather than relaying the 400 the API would answer with. The register
+itself still happens, since that is how the transport is learned, and against
+an already-registered host that includes the sizes `PUT`. Only absolute
+http(s) URLs without credentials are accepted; a bare origin is normalized
+without its trailing slash, and a path is kept.
 
 Every run claims `amika-hostd.pid` in that state directory, atomically, and refuses to
 start while it names a live daemon. The daemon sets `process.title` to

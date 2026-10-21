@@ -15,8 +15,10 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// hostsBody is the two-host listing the host-command tests run against: one
-// ready host with a size, one still waiting for its URL.
+// hostsBody is the three-host listing the host-command tests run against: one
+// ready host with a size, one still waiting for its URL, and one tunnelled,
+// which never has one. Neither of the first two carries a transport, as a
+// control plane older than the field answers.
 func hostsBody() []map[string]any {
 	return []map[string]any{
 		{
@@ -32,6 +34,11 @@ func hostsBody() []map[string]any {
 			"id": "host_2", "hostname": "beta.lan", "url": nil, "org_id": "org_1",
 			"sizes":      map[string]any{},
 			"created_at": "2026-01-03T00:00:00Z", "updated_at": "2026-01-03T00:00:00Z",
+		},
+		{
+			"id": "host_3", "hostname": "delta.lan", "url": nil, "org_id": "org_1",
+			"sizes": map[string]any{}, "transport_mode": "tunnel",
+			"created_at": "2026-01-04T00:00:00Z", "updated_at": "2026-01-04T00:00:00Z",
 		},
 	}
 }
@@ -125,9 +132,31 @@ func TestHostListText(t *testing.T) {
 	}
 	// A host with no URL and no sizes still gets a row, with "-" in both —
 	// blank cells would hide the very thing the listing exists to show.
+	// Counting the fields is also what pins these cells to one
+	// whitespace-free token each, which `rowFor` above and anyone piping
+	// this into awk both rely on: a space in the TRANSPORT or URL cell
+	// would silently turn one column into two and the count would not be 4.
+	// SIZES is the one cell that can hold a space, since a host names its
+	// own sizes and nothing rejects a space in one. It is the last column,
+	// so it costs only itself.
 	beta := rowFor(t, out, "beta.lan")
-	if got := strings.Fields(beta); len(got) != 3 || got[1] != "-" || got[2] != "-" {
-		t.Errorf("beta.lan row = %q, want its URL and sizes as \"-\"", beta)
+	if got := strings.Fields(beta); len(got) != 4 || got[1] != "listen" ||
+		got[2] != "-" || got[3] != "-" {
+		t.Errorf("beta.lan row = %q, want listen with its URL and sizes as \"-\"", beta)
+	}
+	// A tunnelled host shows the same "-" as a listener that never
+	// registered; TRANSPORT is what tells them apart, so the column has to
+	// be there and has to be right.
+	delta := rowFor(t, out, "delta.lan")
+	if got := strings.Fields(delta); len(got) != 4 || got[1] != "tunnel" ||
+		got[2] != "-" {
+		t.Errorf("delta.lan row = %q, want tunnel with its URL as \"-\"", delta)
+	}
+	// The rows above would still pass if the column were unlabelled, so
+	// check the header names it too: that is what tells a reader which of
+	// the four fields they are looking at.
+	if !strings.Contains(out, "TRANSPORT") {
+		t.Errorf("no TRANSPORT column in %q", out)
 	}
 	// Ids are not a listing column; `host get` and -o json carry them.
 	if strings.Contains(out, "host_1") {
@@ -150,22 +179,34 @@ func TestHostListJSONEmitsTheAPIShape(t *testing.T) {
 	if err := json.Unmarshal(buf.Bytes(), &got); err != nil {
 		t.Fatalf("decoding %q: %v", buf.String(), err)
 	}
-	if len(got) != 2 {
-		t.Fatalf("got %d hosts, want 2: %s", len(got), buf.String())
+	if len(got) != 3 {
+		t.Fatalf("got %d hosts, want 3: %s", len(got), buf.String())
 	}
 	for field, want := range map[string]string{"id": `"host_1"`, "org_id": `"org_1"`} {
 		if string(got[0][field]) != want {
 			t.Errorf("got[0][%q] = %s, want %s", field, got[0][field], want)
 		}
 	}
-	// A consumer finds the hosts that have not finished registering with
-	// `select(.url == null)`, which an omitted key would quietly never match.
+	// A consumer finds the listening hosts that have not finished registering
+	// with `select(.transport_mode == "listen" and .url == null)`. An omitted
+	// url key would quietly never match, and a null url on its own also
+	// matches every tunnelled host, which is not waiting on anything.
 	raw, ok := got[1]["url"]
 	if !ok {
 		t.Fatalf("a URL-less host must carry an explicit null url: %s", buf.String())
 	}
 	if string(raw) != "null" {
 		t.Errorf("url = %s, want null", raw)
+	}
+	// The stub answers as a control plane older than `transport_mode` does,
+	// omitting it. The schema marks it required, so emitting "" here would
+	// put a value in `-o json` that no version of the API produces; it is
+	// read as the listener such a plane only ever serves.
+	for i, want := range []string{`"listen"`, `"listen"`, `"tunnel"`} {
+		if string(got[i]["transport_mode"]) != want {
+			t.Errorf("got[%d].transport_mode = %s, want %s",
+				i, got[i]["transport_mode"], want)
+		}
 	}
 }
 
@@ -187,6 +228,26 @@ func TestHostListJSONEmitsAnEmptyArray(t *testing.T) {
 	}
 	if got := strings.TrimSpace(buf.String()); got != "[]" {
 		t.Errorf("output = %q, want []", got)
+	}
+}
+
+func TestHostGetShowsTheTransport(t *testing.T) {
+	stubHostAPI(t)
+
+	// `host get` is where an operator looks when the listing's "-" leaves
+	// them unsure, so it has to name the transport rather than make them
+	// infer it from a URL that is absent for two different reasons.
+	for _, tc := range []struct{ host, want string }{
+		{"delta.lan", "Transport:  tunnel"},
+		{"alpha.lan", "Transport:  listen"},
+	} {
+		c, buf := newHostCmd(runHostGet, nil)
+		if err := runHostGet(c, []string{tc.host}); err != nil {
+			t.Fatalf("runHostGet(%s): %v", tc.host, err)
+		}
+		if !strings.Contains(buf.String(), tc.want) {
+			t.Errorf("%s output %q missing %q", tc.host, buf.String(), tc.want)
+		}
 	}
 }
 

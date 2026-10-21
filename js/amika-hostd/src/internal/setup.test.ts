@@ -16,7 +16,12 @@ import {
 const PATH = "/config/amika-hostd/config.toml";
 const OLD_SECRET = "a".repeat(64);
 const NEW_SECRET = "b".repeat(64);
-const HOST = { id: "host_1", hostname: "builder", url: null };
+const HOST = {
+  id: "host_1",
+  hostname: "builder",
+  url: null,
+  transport_mode: "listen" as const,
+};
 
 /**
  * A setup run against fakes. `kind` picks the secret store: with "file" (the
