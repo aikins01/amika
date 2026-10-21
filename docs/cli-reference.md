@@ -51,7 +51,11 @@ like `rig create`: the current Git repository is detected unless `--git` or
 amika send "Fix the tests" --rig my-rig
 amika send "Now update the README" --session-id <session-id>
 amika send "Summarize the code" --rig my-rig --output json
+amika send "Fix the tests" --rig name=my-rig
 ```
+
+`--rig` takes a [rig reference](#naming-a-rig): a name or id, or
+`name=<name>` / `id=<id>` to match one field.
 
 Replies stream to a terminal by default; piped output and JSON are buffered.
 Use `--stream` or `--stream=false` to choose text behavior. Text metadata goes
@@ -63,6 +67,40 @@ response, then exits unsuccessfully.
 ## `amika sandbox`
 
 Manage persistent rigs backed by the Amika control plane.
+
+### Naming a rig
+
+Rig names are chosen by people and ids by the control plane, so one value can
+in principle be one rig's id and another rig's name. Every command that acts
+on an existing rig therefore takes a rig reference that can say which field
+it means:
+
+| Reference     | Matches                                                                                  |
+| ------------- | ---------------------------------------------------------------------------------------- |
+| `my-rig`      | The rig whose name or id is `my-rig`. Refused when it is one rig's id and another rig's name |
+| `name=my-rig` | The rig named `my-rig`                                                                   |
+| `id=<id>`     | The rig with this id                                                                     |
+| `_self`       | The rig the command runs in, read from `AMIKA_RIG_NAME` (or the older `AMIKA_SANDBOX_NAME`) |
+
+A plain value is all you need day to day. Reach for `name=` or `id=` in
+scripts, or when the CLI reports that a reference is ambiguous; the error
+names both spellings. Only the text before the first `=` is checked, and only
+`ref`, `name`, and `id` count as prefixes, so `ref=my-rig` is the same as
+`my-rig`.
+
+References work for the positional `<rig>` of `get`, `start`, `stop`,
+`delete`, `connect`, `ssh`, `open`, and `agent-send`, for the `--rig` flag of
+`send`, `service create`, `service delete`, `service list`, `snapshot create`,
+and `snapshot list`, and for the rig in an [`amika scp`](#amika-scp) operand.
+`ssh`, `open`, `connect`, and `scp` look the rig up first and connect through
+its `<name>.<id>.<environment>.amika` SSH alias, so a `name=` or `id=` prefix
+never reaches `ssh` or `scp` itself.
+
+```bash
+amika rig get name=my-rig
+amika rig delete id=9f3c8b21-0000-4000-8000-000000000000
+amika rig ssh id=9f3c8b21-0000-4000-8000-000000000000 uptime
+```
 
 ### Global sandbox flags
 
@@ -78,40 +116,46 @@ Every `sandbox` subcommand talks to the Amika API and requires you to be logged 
 
 Create a new sandbox.
 
+```
+amika sandbox create [<name>] [flags]
+```
+
+`<name>` names the sandbox. If omitted, a random `{color}-{city}` name is generated (e.g. `teal-tokyo`). The older `--name <name>` flag still works but is no longer shown in help; passing both is an error.
+
 ```bash
 # Minimal — auto-generates a name, uses the default snapshot
 amika sandbox create
 
 # Auto-detect the git repo containing the current working directory
 # (this is the default behavior when no --git/--no-git flag is passed)
-amika sandbox create --name dev-sandbox
+amika sandbox create dev-sandbox
 
 # Mount git repo at a specific path
-amika sandbox create --name dev-sandbox --git ./src
+amika sandbox create dev-sandbox --git ./src
 
 # Mount a remote git repo by URL (HTTPS or SSH)
-amika sandbox create --name dev-sandbox --git https://github.com/octocat/Hello-World.git
+amika sandbox create dev-sandbox --git https://github.com/octocat/Hello-World.git
 
 # Skip git auto-detection and create a bare sandbox
-amika sandbox create --name dev-sandbox --no-git
+amika sandbox create dev-sandbox --no-git
 
 # Use the Docker-in-Docker preset
-amika sandbox create --name docker-box --preset coder-plus-docker
+amika sandbox create docker-box --preset coder-plus-docker
 
 # Pick a size
-amika sandbox create --name dev-sandbox --size m
+amika sandbox create dev-sandbox --size m
 
 # Set environment variables
-amika sandbox create --name dev-sandbox --env MY_KEY=my_value
+amika sandbox create dev-sandbox --env MY_KEY=my_value
 
 # Create and immediately connect
-amika sandbox create --name dev-sandbox --connect
+amika sandbox create dev-sandbox --connect
 
 # Run a setup script on container start
-amika sandbox create --name dev-sandbox --setup-script ./install-deps.sh
+amika sandbox create dev-sandbox --setup-script ./install-deps.sh
 
 # Clone a specific git branch
-amika sandbox create --name dev-sandbox --branch develop
+amika sandbox create dev-sandbox --branch develop
 
 # Create a new branch from your current branch
 amika sandbox create --new-branch feature-x
@@ -120,21 +164,20 @@ amika sandbox create --new-branch feature-x
 amika sandbox create --branch main --new-branch bugfix-1
 
 # Inject remote secrets
-amika sandbox create --name dev-sandbox \
+amika sandbox create dev-sandbox \
   --secret env:ANTHROPIC_API_KEY=my-claude-key
 
 # Fork from a captured snapshot
-amika sandbox create --name dev-sandbox --snapshot amika-mono-base
+amika sandbox create dev-sandbox --snapshot amika-mono-base
 
 # Run it on one of your organization's own hosts, at one of that host's sizes
-amika sandbox create --name dev-sandbox --host alpha.lan --size small
+amika sandbox create dev-sandbox --host alpha.lan --size small
 ```
 
 #### Flags
 
 | Flag                    | Default              | Description                                                                                                                          |
 | ----------------------- | -------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
-| `--name <name>`         | auto-generated       | Name for the sandbox. If omitted, a random `{color}-{city}` name is generated (e.g. `teal-tokyo`)                                    |
 | `--preset <name>`       |                      | Use a preset environment, e.g. `coder` or `coder-plus-docker`. See [presets.md](presets.md)                                          |
 | `--size <size>`         | `m`                  | Sandbox size, e.g. `m` or `a1.medium`. The API validates it and lists what your provider offers. With `--host`, one of that host's own sizes instead, defaulting to 4 vCPU / 8 GiB / 20 GiB rather than `m` |
 | `--host <hostname\|id>` |                      | Run the rig on one of your organization's own hosts rather than on Amika Cloud. See [`amika host`](#amika-host). With `--snapshot`, boots one of that host's own snapshots; a snapshot taken anywhere else is refused. The create fails if the control plane did not put the rig on that host |
@@ -182,7 +225,7 @@ The `ID` column shows the sandbox id, and `BASE_SNAPSHOT` shows the snapshot it 
 ### `amika sandbox connect`
 
 Open an interactive shell using the same direct WebSocket SSH transport as
-`amika rig ssh <name>`. Use `ssh` when you need SSH options or a remote command;
+`amika rig ssh <rig>`. Use `ssh` when you need SSH options or a remote command;
 `connect` is the shell-only form. Both require an SSH identity configured with
 `amika secret ssh-keygen`. The `rig create --connect` flag uses this transport
 after the rig is ready.
@@ -201,6 +244,9 @@ amika sandbox delete dev-sandbox
 
 # Delete multiple sandboxes
 amika sandbox delete sandbox-1 sandbox-2
+
+# Delete a rig by id
+amika sandbox delete id=9f3c8b21-0000-4000-8000-000000000000
 
 # Skip the confirmation prompt
 amika sandbox delete dev-sandbox --force
@@ -236,11 +282,11 @@ transport. Remote sandboxes only; requires an SSH identity from
 `amika secret ssh-keygen`.
 
 ```
-amika sandbox ssh [ssh-options] <name> [command...]
+amika sandbox ssh [ssh-options] <rig> [command...]
 ```
 
-Use it like `ssh`: options go before the sandbox name, an optional command
-after it. Every ssh option works, including port forwarding, and `ssh`
+Use it like `ssh`: options go before the [rig](#naming-a-rig), an optional
+command after it. Every ssh option works, including port forwarding, and `ssh`
 defines no flags of its own.
 
 Amika's own flags go **before** `ssh`:
@@ -344,7 +390,7 @@ amika sandbox code my-sandbox --editor=vscode
 
 Send a message to a coding agent in an existing rig and keep the conversation
 as a durable chat. This is the rig-scoped spelling of
-`amika send --rig <name> [message]`, with the same session handling, streaming,
+`amika send --rig <rig> [message]`, with the same session handling, streaming,
 and JSON response format.
 
 A chat stores the conversation so later sends can continue it. Without
@@ -422,18 +468,18 @@ This is a thin wrapper around the system `scp` binary: every argument is forward
 amika scp <source> ... <target>
 ```
 
-Sandbox names are resolved wherever they appear, so a single command can copy between two sandboxes, or between a sandbox and an SSH host. Sources and targets may take any of these forms:
+Rigs are resolved wherever they appear, so a single command can copy between two rigs, or between a rig and an SSH host. `RIG` below is a [rig reference](#naming-a-rig): a name or id, or `name=<name>` / `id=<id>`. Sources and targets may take any of these forms:
 
 | Form                              | Meaning                                                                        |
 | --------------------------------- | ------------------------------------------------------------------------------ |
 | `PATH`                            | A local path                                                                   |
-| `NAME[:PATH]`                     | A path in sandbox `NAME` (scp-style); a relative `PATH` is under the sandbox home (`/home/amika`), an absolute `PATH` is used verbatim |
-| `sbox://NAME[/PATH]`              | A path in sandbox `NAME` (URI form); `PATH` is absolute and `~` is the home directory. A `/` in `NAME` must be percent-encoded as `%2F` |
+| `RIG:[PATH]`                      | A path in rig `RIG` (scp-style); a relative `PATH` is under the rig home (`/home/amika`), an absolute `PATH` is used verbatim |
+| `sbox://RIG[/PATH]`               | A path in rig `RIG` (URI form); `PATH` is absolute and `~` is the home directory. A `/` in `RIG` must be percent-encoded as `%2F` |
 | `scp://[user@]host[:port][/path]` | A path on an arbitrary SSH host                                                |
 
 A bare `host:path` **always** names a sandbox; to reach an arbitrary SSH host, use an `scp://` URI.
 
-Each sandbox resolves to its `<name>.<id>.<environment>.amika` alias, and the connection settings (user, identity file, host-key policy, `ProxyCommand`) all come from the managed `Host *.amika` block in `~/.ssh/amika.conf`. There are therefore no connection options to prepend: the operands are rewritten and the rest of the argv is handed to `scp` untouched. A fresh session is created and the host key re-pinned per dial.
+Each rig resolves to its `<name>.<id>.<environment>.amika` alias, and the connection settings (user, identity file, host-key policy, `ProxyCommand`) all come from the managed `Host *.amika` block in `~/.ssh/amika.conf`. There are therefore no connection options to prepend: the operands are rewritten and the rest of the argv is handed to `scp` untouched. A fresh session is created and the host key re-pinned per dial.
 
 ```bash
 # Upload a file into the sandbox home
@@ -444,6 +490,9 @@ amika scp -r my-sandbox:/srv/out ./out
 
 # Sandbox URI form, relative to the home directory
 amika scp ./a.txt sbox://my-sandbox/~/a.txt
+
+# Name the rig by id
+amika scp ./a.txt id=9f3c8b21-0000-4000-8000-000000000000:a.txt
 
 # Copy from a sandbox to another SSH host
 amika scp my-sandbox:/data.csv scp://user@host:22/tmp/data.csv
