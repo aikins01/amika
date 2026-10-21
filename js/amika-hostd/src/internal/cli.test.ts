@@ -551,7 +551,7 @@ describe("completing registration", () => {
     // The API would refuse it anyway; relaying a bare 400 leaves the
     // operator decoding why. Name the host and the reason instead. The
     // idempotent register still runs, since that is how the transport is
-    // learned; it is only the PUT that never goes out.
+    // learned; it is only the URL that never goes out.
     const h = harness();
     h.deps.registerHost.mockResolvedValue({
       host: TUNNEL_HOST,

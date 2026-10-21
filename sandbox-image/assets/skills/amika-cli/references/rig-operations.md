@@ -49,7 +49,7 @@ refused.
 
 ```bash
 amika host list                       # HOSTNAME, TRANSPORT, URL, SIZES
-amika hosts                           # "hosts" is an alias for `host list`
+amika hosts list                      # "hosts" is an alias for "host"
 amika host list -o json               # ids, timestamps, per-size resources
 amika host get alpha.lan              # the sizes that host offers
 amika rig create --host alpha.lan --size small

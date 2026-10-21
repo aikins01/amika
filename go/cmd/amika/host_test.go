@@ -132,10 +132,12 @@ func TestHostListText(t *testing.T) {
 	}
 	// A host with no URL and no sizes still gets a row, with "-" in both —
 	// blank cells would hide the very thing the listing exists to show.
-	// Counting the fields is also what pins every cell to a single
-	// whitespace-free token, which `rowFor` above and anyone piping this
-	// into awk both rely on: a cell with a space in it would silently turn
-	// one column into two and the count would not be 4.
+	// Counting the fields is also what pins these cells to one
+	// whitespace-free token each, which `rowFor` above and anyone piping
+	// this into awk both rely on: a space in the TRANSPORT or URL cell
+	// would silently turn one column into two and the count would not be 4.
+	// Only SIZES can hold a space, and only because `tableCell` puts one
+	// there in place of a tab a host's own size name smuggled in.
 	beta := rowFor(t, out, "beta.lan")
 	if got := strings.Fields(beta); len(got) != 4 || got[1] != "listen" ||
 		got[2] != "-" || got[3] != "-" {
