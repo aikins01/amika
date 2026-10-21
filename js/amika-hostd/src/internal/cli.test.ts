@@ -585,6 +585,12 @@ describe("completing registration", () => {
     expect(h.out).toContain(
       "Amika assigns this host's address; it needs no public URL and nothing exposed.",
     );
+    // ...without claiming the host is reachable. Nothing in this daemon
+    // opens the outbound connection, so saying the operator is done would
+    // promise something it cannot see.
+    expect(h.out).toContain(
+      "Amika reports whether it can reach the host; this daemon does not.",
+    );
   });
 
   it("`up` starts the daemon, then asks for the URL, retrying until valid", async () => {

@@ -741,6 +741,12 @@ async function completeRegistration(
     deps.out(
       `Amika assigns this host's address; it needs no public URL and nothing exposed.`,
     );
+    // Not the same as saying the host is reachable. This daemon serves
+    // locally and has no way to know whether a gateway has picked it up, so
+    // it does not claim one has.
+    deps.out(
+      `Amika reports whether it can reach the host; this daemon does not.`,
+    );
     return true;
   }
   if (host.url !== null) {

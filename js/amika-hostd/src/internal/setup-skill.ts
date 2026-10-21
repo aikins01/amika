@@ -134,9 +134,10 @@ not done; the message names what is missing.
 
 ## 4. Make the host reachable
 
-If \`up\` said Amika assigns this host's address, this step is already done:
-Amika reaches the host over its own gateway, there is no URL to give it, and
-\`register-url\` on such a host is refused. Skip to step 5.
+If \`up\` said Amika assigns this host's address, there is nothing to do here:
+Amika reaches such a host over its own gateway, there is no URL to give it,
+and \`register-url\` on one is refused. Whether Amika can reach it yet is
+Amika's to report, not this daemon's. Skip to step 5.
 
 Otherwise Amika reaches the host over the internet. If \`up\` printed "To
 complete registration", expose the daemon's local address with an HTTPS

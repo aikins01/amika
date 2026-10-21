@@ -68,7 +68,9 @@ no URL to give it, and `register-url` on such a host is refused by the daemon
 before it sends one, as the API would refuse it too. `up` says so and asks
 nothing. Anything that is not a listener is treated this way, so a transport
 added later is left for the control plane to answer for rather than being
-asked to expose a port.
+asked to expose a port. Complete is not the same as reachable: this daemon
+only serves locally and opens no outbound connection, so whether Amika can
+reach such a host is the control plane's to report, and `up` says so.
 
 For a listening host, completion means its internet-facing URL (an ngrok or
 Cloudflare Tunnel URL, for example). If it has no URL and stdin and stdout
