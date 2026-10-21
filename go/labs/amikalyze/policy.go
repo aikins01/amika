@@ -74,16 +74,15 @@ func Evaluate(repoRoot, target string, overrides Overrides) (Decision, error) {
 	if err != nil {
 		return Decision{}, fmt.Errorf("resolving repository root: %w", err)
 	}
-	target, err = filepath.Abs(target)
+	repoRoot, err = filepath.EvalSymlinks(repoRoot)
 	if err != nil {
-		return Decision{}, fmt.Errorf("resolving target path: %w", err)
+		return Decision{}, fmt.Errorf("resolving repository root: %w", err)
 	}
-	repoRoot = filepath.Clean(repoRoot)
-	target = filepath.Clean(target)
-	repoPath, inside := relativeInside(repoRoot, target)
+	repoPath, inside := repoRelative(repoRoot, target)
 	if !inside {
 		return Decision{}, fmt.Errorf("target %s is outside repository %s", target, repoRoot)
 	}
+	target = filepath.Join(repoRoot, repoPath)
 	decision := Decision{TargetPath: target, RepoPath: filepath.ToSlash(repoPath)}
 
 	configs, err := discoverConfigs(repoRoot, filepath.Dir(target))
@@ -181,13 +180,54 @@ func relativeInside(base, target string) (string, bool) {
 	return relative, true
 }
 
+// repoRelative returns target's path relative to repoRoot, which must have its
+// symlinks resolved, as Git reports it. Git and the agent can spell the same
+// directory differently (on macOS, /var and /tmp are symlinks into /private,
+// and a cwd may be a symlink to a directory inside the repository), so this
+// finds the outermost ancestor of target that resolves into the repository
+// and keeps the components below it as written. Symlinks inside the
+// repository are not followed: a target is matched by the path the agent
+// names.
+func repoRelative(repoRoot, target string) (string, bool) {
+	target, err := filepath.Abs(target)
+	if err != nil {
+		return "", false
+	}
+	repoPath, found := "", false
+	dir, rest := filepath.Dir(target), []string{filepath.Base(target)}
+	for {
+		if resolved, err := filepath.EvalSymlinks(dir); err == nil {
+			if prefix, inside := relativeInside(repoRoot, resolved); inside {
+				repoPath, found = filepath.Join(append([]string{prefix}, rest...)...), true
+			}
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return repoPath, found
+		}
+		rest = append([]string{filepath.Base(dir)}, rest...)
+		dir = parent
+	}
+}
+
 func samePath(left, right string) bool {
 	if left == "" || right == "" {
 		return false
 	}
 	leftAbs, leftErr := filepath.Abs(left)
 	rightAbs, rightErr := filepath.Abs(right)
-	return leftErr == nil && rightErr == nil && filepath.Clean(leftAbs) == filepath.Clean(rightAbs)
+	if leftErr != nil || rightErr != nil {
+		return false
+	}
+	// Compare resolved paths where they exist, so a repository root spelled
+	// through a symlink matches the resolved root Evaluate works from.
+	if resolved, err := filepath.EvalSymlinks(leftAbs); err == nil {
+		leftAbs = resolved
+	}
+	if resolved, err := filepath.EvalSymlinks(rightAbs); err == nil {
+		rightAbs = resolved
+	}
+	return filepath.Clean(leftAbs) == filepath.Clean(rightAbs)
 }
 
 func sliceSet(values []string) map[string]struct{} {

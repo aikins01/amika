@@ -74,7 +74,7 @@ func EvaluateHook(source Source, input io.Reader, overrides Overrides) (HookDeci
 		if !filepath.IsAbs(target) {
 			target = filepath.Join(payload.CWD, target)
 		}
-		if _, inside := relativeInside(repoRoot, filepath.Clean(target)); !inside {
+		if _, inside := repoRelative(repoRoot, target); !inside {
 			continue
 		}
 		decision, err := Evaluate(repoRoot, target, overrides)
