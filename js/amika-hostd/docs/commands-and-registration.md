@@ -84,8 +84,10 @@ operator that Amika expects to reach it there.
 `up`: it registers idempotently to learn the host's id, then sends
 `PUT /api/v0beta1/hosts/{id}` with the hostname and URL and no secret, so the
 stored secret is kept. If that register comes back as anything but a listener,
-it refuses by name ("Amika assigns the address of host ...") and sends no
-`PUT`, rather than relaying the 400 the API would answer with. Only absolute
+it refuses by name ("Amika assigns the address of host ...") and never sends
+the URL, rather than relaying the 400 the API would answer with. The register
+itself still happens, since that is how the transport is learned, and against
+an already-registered host that includes the sizes `PUT`. Only absolute
 http(s) URLs without credentials are accepted; a bare origin is normalized
 without its trailing slash, and a path is kept.
 

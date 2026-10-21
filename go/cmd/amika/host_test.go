@@ -136,8 +136,9 @@ func TestHostListText(t *testing.T) {
 	// whitespace-free token each, which `rowFor` above and anyone piping
 	// this into awk both rely on: a space in the TRANSPORT or URL cell
 	// would silently turn one column into two and the count would not be 4.
-	// Only SIZES can hold a space, and only because `tableCell` puts one
-	// there in place of a tab a host's own size name smuggled in.
+	// SIZES is the one cell that can hold a space, since a host names its
+	// own sizes and nothing rejects a space in one. It is the last column,
+	// so it costs only itself.
 	beta := rowFor(t, out, "beta.lan")
 	if got := strings.Fields(beta); len(got) != 4 || got[1] != "listen" ||
 		got[2] != "-" || got[3] != "-" {
