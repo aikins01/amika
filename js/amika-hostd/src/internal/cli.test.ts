@@ -547,9 +547,11 @@ describe("completing registration", () => {
   const LATER =
     "Run `amika-hostd register-url <url>` to complete registration.";
 
-  it("register-url refuses a tunnelled host before calling Amika", async () => {
+  it("register-url refuses a tunnelled host instead of relaying a 400", async () => {
     // The API would refuse it anyway; relaying a bare 400 leaves the
-    // operator decoding why. Name the host and the reason instead.
+    // operator decoding why. Name the host and the reason instead. The
+    // idempotent register still runs, since that is how the transport is
+    // learned; it is only the PUT that never goes out.
     const h = harness();
     h.deps.registerHost.mockResolvedValue({
       host: TUNNEL_HOST,
@@ -558,6 +560,7 @@ describe("completing registration", () => {
     expect(
       await runCli(["register-url", "https://abc.ngrok.app"], h.deps),
     ).toBe(1);
+    expect(h.deps.registerHost).toHaveBeenCalled();
     expect(h.deps.setHostUrl).not.toHaveBeenCalled();
     expect(h.err.join("\n")).toContain("assigns the address of host builder");
   });

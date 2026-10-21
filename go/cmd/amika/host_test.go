@@ -15,7 +15,7 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// hostsBody is the two-host listing the host-command tests run against: one
+// hostsBody is the three-host listing the host-command tests run against: one
 // ready host with a size, one still waiting for its URL, and one tunnelled,
 // which never has one. Neither of the first two carries a transport, as a
 // control plane older than the field answers.
@@ -132,6 +132,10 @@ func TestHostListText(t *testing.T) {
 	}
 	// A host with no URL and no sizes still gets a row, with "-" in both —
 	// blank cells would hide the very thing the listing exists to show.
+	// Counting the fields is also what pins every cell to a single
+	// whitespace-free token, which `rowFor` above and anyone piping this
+	// into awk both rely on: a cell with a space in it would silently turn
+	// one column into two and the count would not be 4.
 	beta := rowFor(t, out, "beta.lan")
 	if got := strings.Fields(beta); len(got) != 4 || got[1] != "listen" ||
 		got[2] != "-" || got[3] != "-" {
@@ -145,9 +149,9 @@ func TestHostListText(t *testing.T) {
 		got[2] != "-" {
 		t.Errorf("delta.lan row = %q, want tunnel with its URL as \"-\"", delta)
 	}
-	// Every cell splits on whitespace, which `rowFor` above and anyone
-	// piping this into awk both rely on. A cell containing a space would
-	// silently turn one column into two.
+	// The rows above would still pass if the column were unlabelled, so
+	// check the header names it too: that is what tells a reader which of
+	// the four fields they are looking at.
 	if !strings.Contains(out, "TRANSPORT") {
 		t.Errorf("no TRANSPORT column in %q", out)
 	}

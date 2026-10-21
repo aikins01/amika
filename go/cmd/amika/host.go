@@ -239,10 +239,10 @@ func runHostDelete(cmd *cobra.Command, args []string) error {
 }
 
 // hostURL renders a host's URL for a table cell, as "-" while it has none.
-// Which kind of "-" it is -- a listening host that has not registered one
-// yet, or a tunnelled host that never will -- is the TRANSPORT column's to
-// say, so that every cell here stays free of spaces and `awk '{print $3}'`
-// keeps working.
+// The TRANSPORT column says which kind of "-" it is: a listening host that
+// has not registered one yet, or a tunnelled host that never will. Saying it
+// here instead would put a space in the cell, and every cell has to stay one
+// whitespace-free token for `awk '{print $3}'` to keep working.
 func hostURL(h apiclient.Host) string {
 	if h.URL == nil || *h.URL == "" {
 		return "-"

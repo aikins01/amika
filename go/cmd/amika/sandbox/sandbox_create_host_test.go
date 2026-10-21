@@ -84,7 +84,7 @@ func TestResolveCreateHost(t *testing.T) {
 		// The only combination today's API produces: no `transport_mode` and
 		// no URL. Such a plane serves listening hosts only, so this has to
 		// keep answering exactly as it did before the field existed. The
-		// `beta.lan` case above cannot show that -- it is sent an explicit
+		// `beta.lan` case above cannot show that: it is sent an explicit
 		// mode, so it would survive the check being inverted.
 		_, err := resolveCreateHost(client, "legacy.lan")
 		if err == nil || !strings.Contains(err.Error(), "register-url") {

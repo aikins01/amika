@@ -446,7 +446,7 @@ Lists `HOSTNAME`, `TRANSPORT`, `URL`, and `SIZES`. Read the `-` in `URL` against
 
 ### `amika host get <hostname-or-id>`
 
-Shows one host's details and the sizes it offers its rigs. Those size names, not the cloud size vocabulary, are what `rig create --host ... --size ...` accepts.
+Shows one host's details and the sizes it offers its rigs, including its `Transport`: a `tunnel` host shows no URL, because Amika assigns its address and there is none to register. Those size names, not the cloud size vocabulary, are what `rig create --host ... --size ...` accepts.
 
 ### `amika host delete <hostname-or-id> [...]`
 

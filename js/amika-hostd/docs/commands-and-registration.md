@@ -83,9 +83,11 @@ operator that Amika expects to reach it there.
 `amika-hostd register-url <url>` sets the URL from the same configuration as
 `up`: it registers idempotently to learn the host's id, then sends
 `PUT /api/v0beta1/hosts/{id}` with the hostname and URL and no secret, so the
-stored secret is kept. Only absolute http(s) URLs without credentials are
-accepted; a bare origin is normalized without its trailing slash, and a path is
-kept.
+stored secret is kept. If that register comes back as anything but a listener,
+it refuses by name ("Amika assigns the address of host ...") and sends no
+`PUT`, rather than relaying the 400 the API would answer with. Only absolute
+http(s) URLs without credentials are accepted; a bare origin is normalized
+without its trailing slash, and a path is kept.
 
 Every run claims `amika-hostd.pid` in that state directory, atomically, and refuses to
 start while it names a live daemon. The daemon sets `process.title` to
