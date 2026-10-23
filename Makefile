@@ -9,10 +9,22 @@ E2E_SANDBOX_PROVIDER ?= daytona
 ZIZMOR_VERSION = 1.25.2
 
 export GOCACHE := $(CURDIR)/.gocache
-export GOTMPDIR := $(CURDIR)/.gotmp
+# No GOTMPDIR: since Go 1.26, t.TempDir creates its directories there, and
+# a repo-relative path pushes the unix sockets the internal/ssh tests bind
+# past the 108-byte sun_path limit.
+
+# Go 1.27.0-1.27.2 predate the GO-2026-6809 denylist, yet satisfy go.mod's
+# `go 1.26.10` floor, so Go keeps them instead of switching toolchains.
+# Asking from $(GO_DIR) reports the toolchain go.mod would select.
+GO_VULNERABLE = ^go1\.27(\.[0-2])?([^0-9.]|$$)
 
 goenv:
-	mkdir -p "$(GOCACHE)" "$(GOTMPDIR)"
+	@v=$$(go -C $(GO_DIR) env GOVERSION); \
+	if printf '%s\n' "$$v" | grep -Eq '$(GO_VULNERABLE)'; then \
+		echo "$$v is affected by GO-2026-6809; use Go 1.26.10+ or 1.27.3+" >&2; \
+		exit 1; \
+	fi
+	mkdir -p "$(GOCACHE)"
 
 build: build-cli build-amikad build-amikalog build-akfs build-amikalyze
 
