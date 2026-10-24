@@ -1,4 +1,5 @@
 /** HTTP surface for the local VM host daemon. */
+import { IncomingMessage } from "node:http";
 import { Hono, type Context, type Next } from "hono";
 import { bodyLimit } from "hono/body-limit";
 import { HTTPException } from "hono/http-exception";
@@ -43,6 +44,7 @@ import {
   memoryServiceRegistry,
   type ServiceRegistry,
 } from "./internal/service-registry.js";
+import { namedRoute, type NamedRoute } from "./internal/tunnel-rig-route.js";
 
 export interface AppConfig {
   /**
@@ -200,6 +202,23 @@ export function createApp(
   // (`@amika/service-auth/gateway`). Everything else needs the secret key.
   const gateway = hostdGateway(secretKey, amikaUrl);
   const checkSecretKey = requireSecretKey(secretKey);
+  // A request the tunnel named by its hostname is that service's, whatever
+  // its path: `/v0beta1/rigs` on `web--rig.r.org.o.<zone>` is the rig's own
+  // page, never this daemon's machine list. So it goes to the service
+  // before any route here can match it, but for the login endpoints, which
+  // are how a browser logs in to that origin.
+  app.use("*", (c, next) => {
+    const named = namedRoute(incomingOf(c.env));
+    if (!named) return next();
+    const { pathname } = new URL(c.req.url);
+    if (
+      gateway.servesPreviews &&
+      (pathname === LOGIN_PATH || pathname === CALLBACK_PATH)
+    ) {
+      return next();
+    }
+    return proxyService(c.req.raw, gateway, runtime, registry, fetcher, named);
+  });
   app.use("*", (c, next) =>
     gateway.claims(fromRequest(c.req.raw)) ? next() : checkSecretKey(c, next),
   );
@@ -474,14 +493,6 @@ export const DEFAULT_REQUEST_TIMEOUT_MS = 300_000;
 export const API_VERSION = "v0beta1";
 export const FEATURES = ["service-tokens"];
 const RIGS_ROUTE = `/${API_VERSION}/rigs`;
-
-/**
- * The service route for `service` on `rig`, which a request the gateway
- * names by rig and service is rewritten to (`tunnel-rig-route.ts`).
- */
-export function servicePath(rig: string, service: string): string {
-  return `${RIGS_ROUTE}/${rig}/services/${service}`;
-}
 /** This host's snapshots, which belong to the host rather than to one rig. */
 const SNAPSHOTS_ROUTE = `/${API_VERSION}/snapshots`;
 /** Named in `/health` by a daemon that can take snapshots. */
@@ -509,6 +520,19 @@ function snapshotName(requestPath: string): string {
 }
 
 /**
+ * The Node request under a Hono context's `env`, as `@hono/node-server`
+ * passes it, or undefined for a request that came another way (a test's
+ * `app.request`, say).
+ */
+function incomingOf(env: unknown): IncomingMessage | undefined {
+  if (typeof env !== "object" || env === null || !("incoming" in env)) {
+    return undefined;
+  }
+  const { incoming } = env as { incoming: unknown };
+  return incoming instanceof IncomingMessage ? incoming : undefined;
+}
+
+/**
  * Forward a request the gateway claims to the service it names, as the
  * gateway decides: refused, or forwarded without the gateway's credentials,
  * with its answer finished by the gateway (a link's cookie and hardening).
@@ -519,8 +543,10 @@ async function proxyService(
   runtime: MachineRuntime,
   registry: ServiceRegistry,
   fetcher: typeof fetch,
+  /** The service the tunnel named the request for, if it did. */
+  named?: NamedRoute,
 ): Promise<Response> {
-  const decision = await gateway.authorize(fromRequest(request));
+  const decision = await gateway.authorize({ ...fromRequest(request), named });
   if (decision.kind === "not-mine") {
     return Response.json({ error: "Not found" }, { status: 404 });
   }

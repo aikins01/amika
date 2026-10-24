@@ -25,6 +25,7 @@ import { TunnelSocket } from "./tunnel-socket.js";
 import { TunnelAttachment, DEFAULT_LIMITS } from "./tunnel-attachment.js";
 import { dialTunnel, TUNNEL_SUBPROTOCOL } from "./tunnel-dial.js";
 import { virtualServer } from "./tunnel-serving.js";
+import { namedRoute } from "./tunnel-rig-route.js";
 
 const LIMITS = DEFAULT_LIMITS;
 
@@ -146,13 +147,12 @@ afterEach(async () => {
  * headers are exercised too.
  */
 async function attach(
-  serve: (request: Request) => Response | Promise<Response>,
+  serve: (request: Request, env: unknown) => Response | Promise<Response>,
   options: {
     keepAliveIntervalMs?: number;
     pingTimeoutMs?: number;
     limits?: typeof DEFAULT_LIMITS;
     upgrade?: (request: IncomingMessage, socket: Duplex, head: Buffer) => void;
-    servicePath?: (rig: string, service: string) => string;
   } = {},
 ): Promise<Harness> {
   const wss = new WebSocketServer({
@@ -191,11 +191,7 @@ async function attach(
   expect(dialed.connectionId).toBe("conn-1");
   expect(dialed.publicUrl).toBe("https://h-test.hosts.amika.dev");
 
-  const server = virtualServer({
-    fetch: serve,
-    upgrade: options.upgrade,
-    servicePath: options.servicePath,
-  });
+  const server = virtualServer({ fetch: serve, upgrade: options.upgrade });
   const attachment = new TunnelAttachment(dialed.ws, {
     limits: options.limits,
     keepAliveIntervalMs: options.keepAliveIntervalMs ?? 30_000,
@@ -343,11 +339,8 @@ describe("an upgrade stops being HTTP at the 101", () => {
 });
 
 describe("a request the gateway names by rig and service", () => {
-  const servicePath = (rig: string, service: string) =>
-    `/v0beta1/rigs/${rig}/services/${service}`;
-
-  /** A host that says which path and which `x-amika-*` headers it saw. */
-  function echoing(request: Request): Response {
+  /** A host that says which path, which service, and which headers it saw. */
+  function echoing(request: Request, env: unknown): Response {
     const url = new URL(request.url);
     const amika = [...request.headers.keys()].filter((name) =>
       name.startsWith("x-amika-"),
@@ -355,12 +348,14 @@ describe("a request the gateway names by rig and service", () => {
     return Response.json({
       path: `${url.pathname}${url.search}`,
       host: request.headers.get("host"),
+      named:
+        namedRoute((env as { incoming: IncomingMessage }).incoming) ?? null,
       amika,
     });
   }
 
-  it("reaches that service's route, with the path the browser asked for after it", async () => {
-    const { gateway } = await attach(echoing, { servicePath });
+  it("reaches the app named for that service, with the path the browser asked for", async () => {
+    const { gateway } = await attach(echoing);
 
     const answer = await gateway.send("/app/page?q=1", {
       headers: {
@@ -372,8 +367,9 @@ describe("a request the gateway names by rig and service", () => {
 
     expect(answer.status).toBe(200);
     expect(JSON.parse(answer.body)).toEqual({
-      path: "/v0beta1/rigs/hacks/services/web/app/page?q=1",
+      path: "/app/page?q=1",
       host: "web--hacks.r.acme.o.amika.run",
+      named: { machine: "hacks", service: "web" },
       // Read, then removed: the service does not see them.
       amika: [],
     });
@@ -381,12 +377,13 @@ describe("a request the gateway names by rig and service", () => {
 
   it("leaves a request that names no rig for this daemon's own API", async () => {
     // The control plane's calls through the gateway carry neither header.
-    const { gateway } = await attach(echoing, { servicePath });
+    const { gateway } = await attach(echoing);
 
     const answer = await gateway.send("/v0beta1/rigs?limit=2");
 
     expect(JSON.parse(answer.body)).toMatchObject({
       path: "/v0beta1/rigs?limit=2",
+      named: null,
     });
   });
 
@@ -399,13 +396,10 @@ describe("a request the gateway names by rig and service", () => {
     ],
   ])("refuses %s, and the app never sees it", async (_case, headers) => {
     let reached = false;
-    const { gateway } = await attach(
-      () => {
-        reached = true;
-        return new Response("served");
-      },
-      { servicePath },
-    );
+    const { gateway } = await attach(() => {
+      reached = true;
+      return new Response("served");
+    });
 
     const answer = await gateway.send("/app", { headers });
 
@@ -413,29 +407,16 @@ describe("a request the gateway names by rig and service", () => {
     expect(reached).toBe(false);
   });
 
-  it("refuses a named rig on a server that serves none by name", async () => {
-    let reached = false;
-    const { gateway } = await attach(() => {
-      reached = true;
-      return new Response("served");
-    });
-
-    const answer = await gateway.send("/app", {
-      headers: { "x-amika-rig": "hacks", "x-amika-service": "web" },
-    });
-
-    expect(answer.status).toBe(400);
-    expect(reached).toBe(false);
-  });
-
-  it("rewrites an upgrade before the upgrade handler sees it", async () => {
-    // A rig's WebSockets take this path, and the upgrade handler routes
-    // by the same service path the app does.
-    let seen: { url?: string; rig?: unknown } = {};
+  it("names an upgrade before the upgrade handler sees it", async () => {
+    // A rig's WebSockets take this path.
+    let seen: { url?: string; named?: unknown; rig?: unknown } = {};
     const { gateway } = await attach(() => new Response("not here"), {
-      servicePath,
       upgrade: (request, socket) => {
-        seen = { url: request.url, rig: request.headers["x-amika-rig"] };
+        seen = {
+          url: request.url,
+          named: namedRoute(request),
+          rig: request.headers["x-amika-rig"],
+        };
         socket.on("error", () => {});
         socket.end(
           "HTTP/1.1 101 Switching Protocols\r\n" +
@@ -451,7 +432,8 @@ describe("a request the gateway names by rig and service", () => {
     await channel.until("101");
 
     expect(seen).toEqual({
-      url: "/v0beta1/rigs/hacks/services/web/live",
+      url: "/live",
+      named: { machine: "hacks", service: "web" },
       rig: undefined,
     });
   });

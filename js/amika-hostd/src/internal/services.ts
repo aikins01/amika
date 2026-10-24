@@ -26,6 +26,7 @@ import {
   type ServiceRoute,
 } from "@amika/service-auth/gateway";
 import { isHostdPath } from "./hostd-paths.js";
+import { namedRoute } from "./tunnel-rig-route.js";
 import type { ServiceRegistry } from "./service-registry.js";
 import type { MachineRuntime } from "./machine-runtime.js";
 
@@ -192,7 +193,14 @@ function fromIncomingMessage(request: IncomingMessage): GatewayRequest {
   } catch {
     url = new URL(request.url ?? "/", "http://hostd");
   }
-  return { method: request.method ?? "GET", url, headers };
+  // The service the tunnel named this upgrade for, if it did: a rig's
+  // WebSocket opened on its own hostname (`tunnel-rig-route.ts`).
+  return {
+    method: request.method ?? "GET",
+    url,
+    headers,
+    named: namedRoute(request),
+  };
 }
 
 const REFUSAL_REASONS = {

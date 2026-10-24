@@ -230,28 +230,41 @@ against the gateway's logs.
 ### A rig named by its hostname
 
 A browser reaches a rig's service at `<service>--<rig>.r.<org>.o.<zone>`.
-That hostname never reaches this daemon: the request goes to the gateway's
-address, and on Cloudflare the gateway's container renames it again. So the
-reverse proxy reads the rig and the service out of it and signs them, and
-the gateway, having checked the signature, writes them onto the tunnel
-stream as `x-amika-rig` and `x-amika-service`. It writes them after
-removing every `x-amika-` header the request arrived with, so on a tunnel
-stream they can only be the gateway's. It also sends the caller's own
-authority as `Host`.
+That hostname never reaches this daemon on its own: the request goes to
+the gateway's address, and on Cloudflare the gateway's container renames
+it again. So the reverse proxy reads the rig and the service out of it and
+signs them, and the gateway, having checked the signature, writes them
+onto the tunnel stream as `x-amika-rig` and `x-amika-service`. It writes
+them after removing every `x-amika-` header the request arrived with, so
+on a tunnel stream they can only be the gateway's. It also sends the
+caller's own authority as `Host`.
 
-The tunnel's server (`tunnel-rig-route.ts`) rewrites such a request to
-`/v0beta1/rigs/<rig>/services/<service>` with the original path after it,
-and removes the two headers. From there it is an ordinary service request:
-the same authorization, the same port lookup, and the rig receives the
-path the browser asked for. A request with neither header is the control
-plane calling this daemon's API, and is left alone. One with only one of
-them, or a name that is not a DNS label, is refused with `400`.
+The tunnel's server (`tunnel-rig-route.ts`) reads the two headers, removes
+them, and records the rig and service beside the request in a `WeakMap`.
+The app and the upgrade handler ask `namedRoute` for it and hand it to the
+service-auth gateway as `GatewayRequest.named`. A header can be forged on a
+listening socket; a `WeakMap` entry only the tunnel's server writes
+cannot, so a listening daemon never names a request.
 
-Only the tunnel's server reads these headers. A listening daemon is
-reached from the internet, where anybody can write them, and it never
-does.
+A named request is that service's whatever its path. `/v0beta1/rigs` on
+`web--rig.r.org.o.<zone>` is the rig's own page, never this daemon's
+machine list, so the app sends it to the service before any of its own
+routes can match. The exceptions are `/__amika/login` and
+`/__amika/callback`, which are how a browser logs in to that origin.
 
-What this does not settle is who may open the page. A browser carries no
-secret key and no service token, so the service route refuses it, as it
-refuses any browser that has not logged in. Browser login for tunnel hosts
-is separate work.
+Who may have it is the gateway's to decide, as for any service:
+
+- The host key or a service token, as on the service route.
+- Otherwise a browser session for that origin. A page load without one is
+  sent to log in at the same origin and comes back to the same path. Amika
+  checks the origin names a rig of the user's organization on this host,
+  and posts the pass to that origin's callback.
+
+Each service is its own origin, so each logs in once, and no cookie has to
+say which service the root belongs to. Every rig shares the zone, so a
+sibling's page is the same site; as for a preview, only the origin's own
+requests and page loads are let through.
+
+A request with neither header is the control plane calling this daemon's
+API, and is left alone. One with only one of them, or a name that is not a
+DNS label, is refused with `400`.

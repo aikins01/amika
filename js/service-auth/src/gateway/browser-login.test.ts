@@ -3,7 +3,7 @@
  * claims), its preview decisions, and its cache-control rule.
  */
 import { describe, expect, it } from "vitest";
-import { signServiceLink, signSession } from "../credentials";
+import { signServiceLink, signServiceToken, signSession } from "../credentials";
 import {
   browserOrigin,
   hardenPreviewResponse,
@@ -277,6 +277,141 @@ describe("previews", () => {
         "a=1; __Host-amika-session=s; __Host-amika-preview=p; __Host-amika-login=l; b=2",
       ),
     ).toBe("a=1; b=2");
+  });
+});
+
+describe("a request named by its hostname", () => {
+  const NAMED_ORIGIN = "https://web--demo.r.acme.o.amika.test";
+  const NAMED = { machine: "demo", service: "web" };
+
+  /** A request that reached the service at its own name. */
+  function named(
+    path: string,
+    headers: Record<string, string> = {},
+    { method = "GET", origin = NAMED_ORIGIN } = {},
+  ): GatewayRequest {
+    return { ...request(path, headers, { origin, method }), named: NAMED };
+  }
+
+  it("is the service's whatever its path, the API's included", () => {
+    for (const path of ["/", "/app", "/v0beta1/rigs", "/health"]) {
+      expect(gateway.claims(named(path))).toBe(true);
+    }
+  });
+
+  it("forwards a browser with a session for this origin, path untouched", async () => {
+    const decision = await gateway.authorize(
+      named("/v0beta1/rigs?x=1", {
+        ...PAGE_LOAD,
+        Cookie: await session(NAMED_ORIGIN),
+      }),
+    );
+    expect(decision).toEqual({
+      kind: "forward",
+      surface: "preview",
+      route: { machine: "demo", service: "web", path: "/v0beta1/rigs" },
+      keyless: false,
+      // The origin is the route. No cookie has to say which service.
+      setCookies: [],
+    });
+  });
+
+  it("sends a page load without a session to log in at this origin, and back", async () => {
+    expect(await gateway.authorize(named("/app/page?q=1", PAGE_LOAD))).toEqual({
+      kind: "login",
+      location: `/__amika/login?${new URLSearchParams({ return: "/app/page?q=1" })}`,
+    });
+  });
+
+  it("refuses a session another origin logged in for", async () => {
+    // Each service is its own origin, and so its own login.
+    const decision = await gateway.authorize(
+      named("/", {
+        "Sec-Fetch-Mode": "cors",
+        "Sec-Fetch-Site": "same-origin",
+        Cookie: await session("https://api--demo.r.acme.o.amika.test"),
+      }),
+    );
+    expect(decision).toMatchObject({ kind: "refuse", status: 401 });
+  });
+
+  it("refuses a sibling site's request that carries the session", async () => {
+    // Another rig's page is the same site under the shared zone, so the
+    // `Lax` session travels with its requests.
+    const decision = await gateway.authorize(
+      named(
+        "/api/delete",
+        {
+          "Sec-Fetch-Mode": "cors",
+          "Sec-Fetch-Site": "same-site",
+          Cookie: await session(NAMED_ORIGIN),
+        },
+        { method: "POST" },
+      ),
+    );
+    expect(decision).toMatchObject({ kind: "refuse", status: 403 });
+  });
+
+  it("lets an upgrade from this origin through, and refuses one from elsewhere", async () => {
+    const upgrade = async (origin: string) =>
+      gateway.authorize(
+        named("/live", { Origin: origin, Cookie: await session(NAMED_ORIGIN) }),
+        { upgrade: true },
+      );
+    expect(await upgrade(NAMED_ORIGIN)).toMatchObject({ kind: "forward" });
+    expect(await upgrade("https://evil--x.r.other.o.amika.test")).toMatchObject(
+      { kind: "refuse", status: 403 },
+    );
+  });
+
+  it("forwards a caller with a service token for this rig and service", async () => {
+    const token = await signServiceToken(SECRET, {
+      rig: "demo",
+      service: "web",
+    });
+    expect(
+      await gateway.authorize(
+        named("/api", { "X-Amika-Authorization": `Bearer ${token}` }),
+      ),
+    ).toMatchObject({
+      kind: "forward",
+      surface: "service",
+      route: { machine: "demo", service: "web", path: "/api" },
+    });
+  });
+
+  it("refuses a service token for another service", async () => {
+    const token = await signServiceToken(SECRET, {
+      rig: "demo",
+      service: "api",
+    });
+    expect(
+      await gateway.authorize(
+        named("/", { "X-Amika-Authorization": `Bearer ${token}` }),
+      ),
+    ).toMatchObject({ kind: "refuse", status: 401 });
+  });
+
+  it("leaves the login endpoints to the server", async () => {
+    expect(await gateway.authorize(named("/__amika/login"))).toEqual({
+      kind: "not-mine",
+    });
+    expect(
+      await gateway.authorize(
+        named("/__amika/callback", {}, { method: "POST" }),
+      ),
+    ).toEqual({ kind: "not-mine" });
+  });
+
+  it("refuses a browser on a server with no login", async () => {
+    const noLogin = createGateway({
+      secretKey: SECRET,
+      isOwnPath: () => false,
+    });
+    expect(await noLogin.authorize(named("/", PAGE_LOAD))).toMatchObject({
+      kind: "refuse",
+      status: 401,
+    });
   });
 });
 

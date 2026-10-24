@@ -9,13 +9,11 @@
  * word, and nothing a caller could have written.
  *
  * On a listening socket they are anybody's, which is why only the tunnel's
- * server reads them. Nothing on the listening path does.
- *
- * The request is then sent where a request for that service has always
- * gone: the service route, with the original path after it. It meets the
- * same authorization, the same port lookup and the same forwarding as one
- * that named the rig in its path, and the rig receives the path the
- * browser asked for.
+ * server reads them, and why what it read is kept beside the request
+ * rather than in it: a header can be forged and a `WeakMap` entry cannot.
+ * The app and the upgrade handler ask `namedRoute`, and the service-auth
+ * gateway takes it from there (`GatewayRequest.named`): every path on that
+ * origin is the service's, behind a browser login of its own.
  *
  * The gateway spells these names in `@amika/service-token/hops`
  * (`GATEWAY_TO_HOST`), in the amika-mono repository. Change both or
@@ -28,39 +26,34 @@ export const RIG_HEADER = "x-amika-rig";
 /** The service on that rig. */
 export const SERVICE_HEADER = "x-amika-service";
 
-/** Where a request for `service` on `rig` is served, without a trailing slash. */
-export type ServicePath = (rig: string, service: string) => string;
+/** The rig and service a request was named for. */
+export interface NamedRoute {
+  machine: string;
+  service: string;
+}
 
 export type RigRouteOutcome =
   /** The request names no rig: it is for this daemon's own API. */
   | { kind: "api" }
-  /** The request was rewritten to the service route. */
-  | { kind: "service"; rig: string; service: string }
+  /** The request is the named service's. */
+  | { kind: "named"; route: NamedRoute }
   /** The request names a rig in a way that cannot be served. */
   | { kind: "refuse"; reason: string };
 
 /**
- * Point `request` at the service its rig headers name, or say why not.
+ * Read the rig headers off a request that came down the tunnel, and
+ * remember them for `namedRoute`.
  *
- * Rewrites `request.url` in place and removes the two headers, so the
- * service the request reaches does not see them. A request with neither
- * header is left alone: the control plane's calls to this daemon's API
- * name no rig.
+ * Removes the two headers, so the service the request reaches does not
+ * see them. A request with neither is left alone: the control plane's
+ * calls to this daemon's API name no rig.
  *
- * With no `servicePath`, a request that names a rig is refused rather
- * than served as an API call, so a browser is never answered with this
- * daemon's own routes.
+ * Call this from the tunnel's server and nowhere else.
  */
-export function routeRigService(
-  request: IncomingMessage,
-  servicePath: ServicePath | undefined,
-): RigRouteOutcome {
+export function routeRigService(request: IncomingMessage): RigRouteOutcome {
   const rig = request.headers[RIG_HEADER];
   const service = request.headers[SERVICE_HEADER];
   if (rig === undefined && service === undefined) return { kind: "api" };
-  if (servicePath === undefined) {
-    return { kind: "refuse", reason: "this server serves no rig by name" };
-  }
   // One without the other is a gateway that does not speak this contract.
   // Serving it as an API call would answer a browser with this daemon's
   // own routes.
@@ -80,15 +73,30 @@ export function routeRigService(
   ) {
     return { kind: "refuse", reason: "request target is not a path" };
   }
-  request.url = `${servicePath(rig, service)}${target}`;
+  const route = { machine: rig, service };
+  named.set(request, route);
   dropHeaders(request, [RIG_HEADER, SERVICE_HEADER]);
-  return { kind: "service", rig, service };
+  return { kind: "named", route };
 }
 
 /**
+ * The rig and service the tunnel named `request` for, or undefined for a
+ * request it did not: one for this daemon's API, or one that did not come
+ * down the tunnel at all.
+ */
+export function namedRoute(
+  request: IncomingMessage | undefined,
+): NamedRoute | undefined {
+  return request === undefined ? undefined : named.get(request);
+}
+
+/** What the tunnel's server read, keyed by the request it read it from. */
+const named = new WeakMap<IncomingMessage, NamedRoute>();
+
+/**
  * A rig or service name: one DNS label's worth of letters, digits and
- * hyphens. Both came out of a hostname, and both go into a path, so
- * nothing else may be in them.
+ * hyphens. Both came out of a hostname, and both are routed by, so nothing
+ * else may be in them.
  */
 const NAME = /^[A-Za-z0-9-]{1,63}$/;
 

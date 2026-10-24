@@ -17,28 +17,21 @@
  *
  * One thing is different, on purpose. A request the gateway forwarded for
  * a browser names its rig and service in two headers, which only the
- * gateway can write on this path. This server points such a request at
- * that service's route before the app sees it (`tunnel-rig-route.ts`).
- * A listening socket never does, because there those headers are a
- * stranger's.
+ * gateway can write on this path. This server reads them and marks the
+ * request as that service's before the app sees it
+ * (`tunnel-rig-route.ts`). A listening socket never does, because there
+ * those headers are a stranger's.
  */
 import { createServer, type IncomingMessage, type Server } from "node:http";
 import type { Duplex } from "node:stream";
 import { getRequestListener } from "@hono/node-server";
-import { routeRigService, type ServicePath } from "./tunnel-rig-route.js";
+import { routeRigService } from "./tunnel-rig-route.js";
 
 export interface VirtualServerOptions {
   /** The Hono app's handler, the same one `startServer` serves. */
   fetch: Parameters<typeof getRequestListener>[0];
   /** The same upgrade handler a listening daemon installs. */
   upgrade?: (request: IncomingMessage, socket: Duplex, head: Buffer) => void;
-  /**
-   * Where a request for a rig's service is served. Given, a request whose
-   * rig and service the gateway named is rewritten to it. Absent, those
-   * headers are refused rather than ignored, so a browser is never
-   * answered with this daemon's own API.
-   */
-  servicePath?: ServicePath;
 }
 
 export interface VirtualServer {
@@ -62,8 +55,7 @@ export interface VirtualServer {
  */
 export function virtualServer(options: VirtualServerOptions): VirtualServer {
   const serve = getRequestListener(options.fetch);
-  const route = (request: IncomingMessage) =>
-    routeRigService(request, options.servicePath);
+  const route = routeRigService;
   const server: Server = createServer((request, response) => {
     const outcome = route(request);
     if (outcome.kind === "refuse") {

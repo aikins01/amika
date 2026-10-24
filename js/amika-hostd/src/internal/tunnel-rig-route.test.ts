@@ -1,9 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { IncomingMessage } from "node:http";
-import { routeRigService } from "./tunnel-rig-route.js";
-
-const servicePath = (rig: string, service: string) =>
-  `/v0beta1/rigs/${rig}/services/${service}`;
+import { namedRoute, routeRigService } from "./tunnel-rig-route.js";
 
 /** A request as Node presents one, with both views of its headers. */
 function incoming(
@@ -20,19 +17,20 @@ function incoming(
 }
 
 describe("routeRigService", () => {
-  it("points a named request at the service route, path and query kept", () => {
+  it("names the request for its rig and service, and keeps its path", () => {
     const request = incoming("/a/b?q=1", [
       ["Host", "web--hacks.r.acme.o.amika.run"],
       ["X-Amika-Rig", "hacks"],
       ["x-amika-service", "web"],
     ]);
 
-    expect(routeRigService(request, servicePath)).toEqual({
-      kind: "service",
-      rig: "hacks",
-      service: "web",
+    expect(routeRigService(request)).toEqual({
+      kind: "named",
+      route: { machine: "hacks", service: "web" },
     });
-    expect(request.url).toBe("/v0beta1/rigs/hacks/services/web/a/b?q=1");
+    expect(namedRoute(request)).toEqual({ machine: "hacks", service: "web" });
+    // The path is the service's own: the origin says which service.
+    expect(request.url).toBe("/a/b?q=1");
   });
 
   it("removes both headers from both views of the request", () => {
@@ -43,7 +41,7 @@ describe("routeRigService", () => {
       ["Accept", "text/html"],
     ]);
 
-    routeRigService(request, servicePath);
+    routeRigService(request);
 
     expect(request.headers).toEqual({
       host: "web--hacks.r.acme.o.amika.run",
@@ -57,11 +55,11 @@ describe("routeRigService", () => {
     ]);
   });
 
-  it("leaves a request that names no rig alone", () => {
+  it("leaves a request that names no rig for the API", () => {
     const request = incoming("/v0beta1/rigs", [["Host", "container"]]);
 
-    expect(routeRigService(request, servicePath)).toEqual({ kind: "api" });
-    expect(request.url).toBe("/v0beta1/rigs");
+    expect(routeRigService(request)).toEqual({ kind: "api" });
+    expect(namedRoute(request)).toBeUndefined();
   });
 
   it.each([
@@ -108,25 +106,24 @@ describe("routeRigService", () => {
       ],
     ],
   ] as Array<[string, string, Array<[string, string]>]>)(
-    "refuses %s, and leaves the target alone",
+    "refuses %s, and names nothing",
     (_case, url, lines) => {
       const request = incoming(url, lines);
 
-      expect(routeRigService(request, servicePath)).toMatchObject({
-        kind: "refuse",
-      });
-      expect(request.url).toBe(url);
+      expect(routeRigService(request)).toMatchObject({ kind: "refuse" });
+      expect(namedRoute(request)).toBeUndefined();
     },
   );
+});
 
-  it("refuses a named rig when there is nowhere to serve one", () => {
+describe("namedRoute", () => {
+  it("names nothing for a request the tunnel never read", () => {
+    // A listener's request carrying the same headers: nothing reads them.
     const request = incoming("/", [
       ["x-amika-rig", "hacks"],
       ["x-amika-service", "web"],
     ]);
-
-    expect(routeRigService(request, undefined)).toMatchObject({
-      kind: "refuse",
-    });
+    expect(namedRoute(request)).toBeUndefined();
+    expect(namedRoute(undefined)).toBeUndefined();
   });
 });
