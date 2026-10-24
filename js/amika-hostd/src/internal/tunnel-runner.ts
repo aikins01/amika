@@ -16,6 +16,7 @@
 import type { Duplex } from "node:stream";
 import { buildHandlers, type SnapshotOptions } from "./server.js";
 import { virtualServer } from "./tunnel-serving.js";
+import { servicePath } from "../app.js";
 import {
   TunnelClient,
   type AttachedInfo,
@@ -77,7 +78,7 @@ export function startTunnel(
     hiddenMachines: options.hiddenMachines,
     snapshots: options.snapshots,
   });
-  const server = virtualServer({ fetch: app.fetch, upgrade });
+  const server = virtualServer({ fetch: app.fetch, upgrade, servicePath });
 
   const client =
     options.client ??

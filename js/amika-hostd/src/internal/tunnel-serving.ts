@@ -14,16 +14,31 @@
  * what `net.Server` does when a real socket arrives. Node's parser, its
  * `upgrade` handling and its `Connection` rules all work the same way,
  * because to Node nothing is different.
+ *
+ * One thing is different, on purpose. A request the gateway forwarded for
+ * a browser names its rig and service in two headers, which only the
+ * gateway can write on this path. This server points such a request at
+ * that service's route before the app sees it (`tunnel-rig-route.ts`).
+ * A listening socket never does, because there those headers are a
+ * stranger's.
  */
 import { createServer, type IncomingMessage, type Server } from "node:http";
 import type { Duplex } from "node:stream";
 import { getRequestListener } from "@hono/node-server";
+import { routeRigService, type ServicePath } from "./tunnel-rig-route.js";
 
 export interface VirtualServerOptions {
   /** The Hono app's handler, the same one `startServer` serves. */
   fetch: Parameters<typeof getRequestListener>[0];
   /** The same upgrade handler a listening daemon installs. */
   upgrade?: (request: IncomingMessage, socket: Duplex, head: Buffer) => void;
+  /**
+   * Where a request for a rig's service is served. Given, a request whose
+   * rig and service the gateway named is rewritten to it. Absent, those
+   * headers are refused rather than ignored, so a browser is never
+   * answered with this daemon's own API.
+   */
+  servicePath?: ServicePath;
 }
 
 export interface VirtualServer {
@@ -46,8 +61,34 @@ export interface VirtualServer {
  * never listened -- see `close` below.
  */
 export function virtualServer(options: VirtualServerOptions): VirtualServer {
-  const server: Server = createServer(getRequestListener(options.fetch));
-  if (options.upgrade) server.on("upgrade", options.upgrade);
+  const serve = getRequestListener(options.fetch);
+  const route = (request: IncomingMessage) =>
+    routeRigService(request, options.servicePath);
+  const server: Server = createServer((request, response) => {
+    const outcome = route(request);
+    if (outcome.kind === "refuse") {
+      response.writeHead(400, { "content-type": "text/plain" });
+      response.end(`${outcome.reason}\n`);
+      return;
+    }
+    void serve(request, response);
+  });
+  const upgrade = options.upgrade;
+  if (upgrade) {
+    server.on(
+      "upgrade",
+      (request: IncomingMessage, socket: Duplex, head: Buffer) => {
+        const outcome = route(request);
+        if (outcome.kind === "refuse") {
+          socket.end(
+            "HTTP/1.1 400 Bad Request\r\nConnection: close\r\nContent-Length: 0\r\n\r\n",
+          );
+          return;
+        }
+        upgrade(request, socket, head);
+      },
+    );
+  }
   return {
     accept(socket: Duplex): void {
       server.emit("connection", socket);

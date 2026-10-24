@@ -226,3 +226,32 @@ A tunnel host binds nothing, so the readiness the daemon reports over IPC
 carries no port. It carries the connection id the gateway named on the
 `101`, where the gateway sends one, which is what matches this daemon
 against the gateway's logs.
+
+### A rig named by its hostname
+
+A browser reaches a rig's service at `<service>--<rig>.r.<org>.o.<zone>`.
+That hostname never reaches this daemon: the request goes to the gateway's
+address, and on Cloudflare the gateway's container renames it again. So the
+reverse proxy reads the rig and the service out of it and signs them, and
+the gateway, having checked the signature, writes them onto the tunnel
+stream as `x-amika-rig` and `x-amika-service`. It writes them after
+removing every `x-amika-` header the request arrived with, so on a tunnel
+stream they can only be the gateway's. It also sends the caller's own
+authority as `Host`.
+
+The tunnel's server (`tunnel-rig-route.ts`) rewrites such a request to
+`/v0beta1/rigs/<rig>/services/<service>` with the original path after it,
+and removes the two headers. From there it is an ordinary service request:
+the same authorization, the same port lookup, and the rig receives the
+path the browser asked for. A request with neither header is the control
+plane calling this daemon's API, and is left alone. One with only one of
+them, or a name that is not a DNS label, is refused with `400`.
+
+Only the tunnel's server reads these headers. A listening daemon is
+reached from the internet, where anybody can write them, and it never
+does.
+
+What this does not settle is who may open the page. A browser carries no
+secret key and no service token, so the service route refuses it, as it
+refuses any browser that has not logged in. Browser login for tunnel hosts
+is separate work.

@@ -474,6 +474,14 @@ export const DEFAULT_REQUEST_TIMEOUT_MS = 300_000;
 export const API_VERSION = "v0beta1";
 export const FEATURES = ["service-tokens"];
 const RIGS_ROUTE = `/${API_VERSION}/rigs`;
+
+/**
+ * The service route for `service` on `rig`, which a request the gateway
+ * names by rig and service is rewritten to (`tunnel-rig-route.ts`).
+ */
+export function servicePath(rig: string, service: string): string {
+  return `${RIGS_ROUTE}/${rig}/services/${service}`;
+}
 /** This host's snapshots, which belong to the host rather than to one rig. */
 const SNAPSHOTS_ROUTE = `/${API_VERSION}/snapshots`;
 /** Named in `/health` by a daemon that can take snapshots. */
