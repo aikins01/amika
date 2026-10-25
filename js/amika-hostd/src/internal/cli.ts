@@ -3,9 +3,11 @@ import { isIPv6 } from "node:net";
 import { parseArgs } from "node:util";
 import {
   AmikaApiError,
+  HostTransportConflictError,
   registerHost as registerHostWithAmika,
   setHostSecret as setHostSecretInAmika,
   setHostSizes as setHostSizesInAmika,
+  setHostTransport as setHostTransportInAmika,
   setHostUrl as setHostUrlInAmika,
   type RegisteredHost,
 } from "./amika-api.js";
@@ -137,6 +139,7 @@ export interface CliDeps {
   isRunning?: (pid: number) => boolean;
   registerHost?: typeof registerHostWithAmika;
   setHostSizes?: typeof setHostSizesInAmika;
+  setHostTransport?: typeof setHostTransportInAmika;
   setHostSecret?: typeof setHostSecretInAmika;
   setHostUrl?: typeof setHostUrlInAmika;
   /**
@@ -672,8 +675,9 @@ function parseHostUrl(value: string): string | undefined {
 
 /**
  * Register before serving, so an unregistered host never accepts traffic. The
- * hostname, secret and sizes are sent; an existing host's secret is never
- * changed, but its sizes are replaced with the configured ones.
+ * hostname, secret, sizes and transport are sent; an existing host's secret is
+ * never changed, but its sizes and transport are brought to the configured
+ * ones.
  */
 async function register(
   config: RegistrationConfig,
@@ -681,10 +685,7 @@ async function register(
 ): Promise<RegisteredHost> {
   const api = { apiUrl: config.apiUrl, apiKey: config.apiKey };
   const { sizes } = config;
-  const { host, created } = await (deps.registerHost ?? registerHostWithAmika)(
-    api,
-    { hostname: config.hostname, secretKey: config.secretKey, sizes },
-  );
+  const { host, created } = await registerInTransport(config, deps);
   if (created) {
     deps.out(
       `Registered host ${host.hostname} with ${config.apiUrl} (${host.id})`,
@@ -704,7 +705,47 @@ async function register(
       `Updated the sizes of host ${host.hostname} (${describeSizes(sizes)})`,
     );
   }
-  return host;
+  if (host.transport_mode === config.transport) return host;
+  // The config is the source of truth for the transport, as for sizes.
+  // Amika refuses to change it on registration, so change it here, before
+  // anything relies on it: enrolment refuses a host not yet in the tunnel.
+  const switched = await (deps.setHostTransport ?? setHostTransportInAmika)(
+    api,
+    host,
+    config.transport,
+  );
+  deps.out(
+    `Switched host ${host.hostname} from ${host.transport_mode} to ${config.transport} mode`,
+  );
+  return switched;
+}
+
+/**
+ * Register in the configured transport, so a new host is created in it. A
+ * host Amika already has in another transport is refused rather than
+ * returned, so register it again without one to learn which host it is;
+ * `register` then moves it.
+ */
+async function registerInTransport(
+  config: RegistrationConfig,
+  deps: CliDeps,
+): Promise<{ host: RegisteredHost; created: boolean }> {
+  const api = { apiUrl: config.apiUrl, apiKey: config.apiKey };
+  const input = {
+    hostname: config.hostname,
+    secretKey: config.secretKey,
+    sizes: config.sizes,
+  };
+  const registerHost = deps.registerHost ?? registerHostWithAmika;
+  try {
+    return await registerHost(api, {
+      ...input,
+      transportMode: config.transport,
+    });
+  } catch (error) {
+    if (!(error instanceof HostTransportConflictError)) throw error;
+    return registerHost(api, input);
+  }
 }
 
 function describeSizes(sizes: Record<string, unknown>): string {

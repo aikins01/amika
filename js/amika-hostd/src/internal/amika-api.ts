@@ -1,6 +1,6 @@
 /** The Amika control-plane endpoints the daemon calls, authenticated by API key. */
 import { z } from "zod";
-import type { HostSize } from "./config.js";
+import type { HostSize, TransportMode } from "./config.js";
 
 export interface AmikaApiConfig {
   apiUrl: string;
@@ -30,16 +30,44 @@ export type RegisteredHost = z.infer<typeof registeredHostSchema>;
  */
 export class AmikaApiError extends Error {
   override name = "AmikaApiError";
+
+  constructor(
+    message: string,
+    /** The API's `error_code`, when the failure came with one. */
+    readonly code?: string,
+  ) {
+    super(message);
+  }
+}
+
+/**
+ * Amika already has a host by this name, in a transport other than the one
+ * asked for. Registration never moves a host between transports; the
+ * caller switches it with `setHostTransport` if it means to.
+ */
+export class HostTransportConflictError extends AmikaApiError {
+  override name = "HostTransportConflictError";
 }
 
 /**
  * Register this host by hostname. The endpoint is idempotent: `201` creates
  * the host and stores the secret, `200` returns the existing host and leaves
  * its stored secret unchanged, so this is safe on every boot.
+ *
+ * `transportMode`, when given, is the transport a new host is created in.
+ * An existing host in another transport is refused with
+ * `HostTransportConflictError` rather than returned; omitted, an existing
+ * host comes back in whatever transport it is stored in, and a new one is
+ * created as a listener.
  */
 export async function registerHost(
   api: AmikaApiConfig,
-  input: { hostname: string; secretKey: string; sizes: HostSizes },
+  input: {
+    hostname: string;
+    secretKey: string;
+    sizes: HostSizes;
+    transportMode?: TransportMode;
+  },
   fetcher: typeof fetch = fetch,
   cancel?: AbortSignal,
 ): Promise<{ host: RegisteredHost; created: boolean }> {
@@ -48,9 +76,22 @@ export async function registerHost(
     fetcher,
     "POST",
     "/api/v0beta1/hosts",
-    { hostname: input.hostname, secret: input.secretKey, sizes: input.sizes },
+    {
+      hostname: input.hostname,
+      secret: input.secretKey,
+      sizes: input.sizes,
+      ...(input.transportMode === undefined
+        ? {}
+        : { transport_mode: input.transportMode }),
+    },
     cancel,
   );
+  if (response.status === 409) {
+    const error = await apiError("register the host", response);
+    throw error.code === "host_transport_conflict"
+      ? new HostTransportConflictError(error.message, error.code)
+      : error;
+  }
   if (response.status !== 200 && response.status !== 201) {
     throw await apiError("register the host", response);
   }
@@ -103,6 +144,34 @@ export async function setHostSizes(
   );
   if (response.status !== 200) {
     throw await apiError("update the host's sizes", response);
+  }
+  return parseHost(response);
+}
+
+/**
+ * Move this host to another transport. Moving into the tunnel clears its
+ * URL, which Amika requires, since a tunnelled host has none; moving out
+ * leaves it unset, for `register-url` or `up` to fill in.
+ */
+export async function setHostTransport(
+  api: AmikaApiConfig,
+  host: Pick<RegisteredHost, "id" | "hostname">,
+  transportMode: TransportMode,
+  fetcher: typeof fetch = fetch,
+): Promise<RegisteredHost> {
+  const response = await send(
+    api,
+    fetcher,
+    "PUT",
+    `/api/v0beta1/hosts/${encodeURIComponent(host.id)}`,
+    {
+      hostname: host.hostname,
+      transport_mode: transportMode,
+      ...(transportMode === "tunnel" ? { url: null } : {}),
+    },
+  );
+  if (response.status !== 200) {
+    throw await apiError(`switch the host to ${transportMode} mode`, response);
   }
   return parseHost(response);
 }
@@ -274,17 +343,23 @@ async function apiError(
     : "error" in body.data
       ? `HTTP ${response.status}: ${body.data.error}`
       : `${body.data.error_code}: ${body.data.message}`;
+  const code =
+    body.success && "error_code" in body.data
+      ? body.data.error_code
+      : undefined;
   switch (response.status) {
     case 401:
       return new AmikaApiError(
         `Amika rejected the API key while trying to ${action} (${detail})`,
+        code,
       );
     case 403:
       return new AmikaApiError(
         `Amika refused to ${action} with this API key (${detail})`,
+        code,
       );
     default:
-      return new AmikaApiError(`failed to ${action} (${detail})`);
+      return new AmikaApiError(`failed to ${action} (${detail})`, code);
   }
 }
 

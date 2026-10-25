@@ -2,9 +2,11 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   AmikaApiError,
+  HostTransportConflictError,
   registerHost,
   setHostSecret,
   setHostSizes,
+  setHostTransport,
   setHostUrl,
 } from "./amika-api.js";
 
@@ -96,7 +98,33 @@ describe("registerHost", () => {
     }[status] as string;
     const fetcher = responding(apiErrorBody(status, code, "details"));
     await expect(registerHost(API, INPUT, fetcher)).rejects.toThrow(
-      new AmikaApiError(message),
+      new AmikaApiError(message, code),
+    );
+  });
+
+  it("asks for a transport only when given one", async () => {
+    const fetcher = responding(Response.json(HOST, { status: 201 }));
+    await registerHost(API, { ...INPUT, transportMode: "tunnel" }, fetcher);
+    expect(JSON.parse(fetcher.mock.calls[0]![1]!.body as string)).toEqual({
+      hostname: "builder",
+      secret: "host-secret",
+      sizes: { large: LARGE },
+      transport_mode: "tunnel",
+    });
+  });
+
+  it("tells a host in another transport apart from other conflicts", async () => {
+    const fetcher = responding(
+      apiErrorBody(409, "host_transport_conflict", "in listen mode"),
+    );
+    const refused = registerHost(
+      API,
+      { ...INPUT, transportMode: "tunnel" },
+      fetcher,
+    );
+    await expect(refused).rejects.toBeInstanceOf(HostTransportConflictError);
+    await expect(refused).rejects.toThrow(
+      "failed to register the host (host_transport_conflict: in listen mode)",
     );
   });
 
@@ -238,6 +266,49 @@ describe("setHostSizes", () => {
     );
     await expect(setHostSizes(API, HOST, {}, fetcher)).rejects.toThrow(
       "failed to update the host's sizes (validation_failed: Invalid host sizes)",
+    );
+  });
+});
+
+describe("setHostTransport", () => {
+  it("clears the URL when moving a host into the tunnel", async () => {
+    const fetcher = responding(Response.json(HOST));
+    await setHostTransport(API, HOST, "tunnel", fetcher);
+    expect(fetcher).toHaveBeenCalledWith(
+      "https://app.amika.dev/api/v0beta1/hosts/host_1",
+      expect.objectContaining({
+        method: "PUT",
+        body: JSON.stringify({
+          hostname: "builder",
+          transport_mode: "tunnel",
+          url: null,
+        }),
+        redirect: "error",
+      }),
+    );
+  });
+
+  it("leaves the URL alone when moving a host out of the tunnel", async () => {
+    const fetcher = responding(Response.json(HOST));
+    await setHostTransport(API, HOST, "listen", fetcher);
+    expect(JSON.parse(fetcher.mock.calls[0]![1]!.body as string)).toEqual({
+      hostname: "builder",
+      transport_mode: "listen",
+    });
+  });
+
+  it("explains a failure", async () => {
+    const fetcher = responding(
+      apiErrorBody(
+        400,
+        "host_tunnel_disabled",
+        "This deployment does not offer the tunnel",
+      ),
+    );
+    await expect(
+      setHostTransport(API, HOST, "tunnel", fetcher),
+    ).rejects.toThrow(
+      "failed to switch the host to tunnel mode (host_tunnel_disabled: This deployment does not offer the tunnel)",
     );
   });
 });
