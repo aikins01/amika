@@ -392,6 +392,43 @@ describe("a request named by its hostname", () => {
     ).toMatchObject({ kind: "refuse", status: 401 });
   });
 
+  it("never lets a browser session reach amikad at its name", async () => {
+    // amikad runs commands in the rig and has no preview. Only the host
+    // key reaches it.
+    const amikad = (headers: Record<string, string>) =>
+      gateway.authorize({
+        ...request("/v1/exec", headers, {
+          origin: "https://amikad--demo.r.acme.o.amika.test",
+        }),
+        named: { machine: "demo", service: "amikad" },
+      });
+
+    expect(
+      await amikad({
+        ...PAGE_LOAD,
+        Cookie: await session("https://amikad--demo.r.acme.o.amika.test"),
+      }),
+    ).toMatchObject({ kind: "refuse", status: 404 });
+    // Not sent to log in either: there is nothing to log in to.
+    expect(await amikad(PAGE_LOAD)).toMatchObject({
+      kind: "refuse",
+      status: 404,
+    });
+    // A service token is refused for amikad, as on its route.
+    const token = await signServiceToken(SECRET, {
+      rig: "demo",
+      service: "amikad",
+    });
+    expect(
+      await amikad({ "X-Amika-Authorization": `Bearer ${token}` }),
+    ).toMatchObject({ kind: "refuse", status: 401 });
+    // The host key still does.
+    expect(await amikad({ "X-Amika-Hostd-Key": SECRET })).toMatchObject({
+      kind: "forward",
+      surface: "service",
+    });
+  });
+
   it("leaves the login endpoints to the server", async () => {
     expect(await gateway.authorize(named("/__amika/login"))).toEqual({
       kind: "not-mine",

@@ -62,6 +62,7 @@ import {
   usedLoginStates,
 } from "./browser-login";
 import {
+  AMIKAD_SERVICE,
   isAmikadSshUpgrade,
   parseServiceLinkPath,
   parseServicePath,
@@ -477,6 +478,12 @@ export function createGateway({
         };
       }
       return forward("service", route, { setCookies: [] });
+    }
+    // amikad runs commands in the rig. It takes the host key and nothing
+    // else, as it has no preview: a browser session, which every member of
+    // the organization can get, must not reach it at its name either.
+    if (named.service === AMIKAD_SERVICE) {
+      return { kind: "refuse", surface: "service", status: 404 };
     }
     if (!previews) {
       return {
