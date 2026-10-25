@@ -212,11 +212,12 @@ export function createApp(
   app.use("*", (c, next) => {
     const named = namedRoute(incomingOf(c.env));
     if (!named) return next();
-    const { pathname } = new URL(c.req.url);
-    if (
-      gateway.servesPreviews &&
-      (pathname === LOGIN_PATH || pathname === CALLBACK_PATH)
-    ) {
+    // Exactly the two login routes, method and all. Anything else on those
+    // paths would fall past them to the catch-all, which routes by the
+    // preview cookie, and a page can set that cookie on its own origin to
+    // reach another rig. Here it goes to the service, and is refused as
+    // not the service's (`authorizeNamed` leaves the login paths alone).
+    if (gateway.servesPreviews && isLoginRoute(c.req.method, c.req.url)) {
       return next();
     }
     return proxyService(c.req.raw, gateway, runtime, registry, fetcher, named);
@@ -519,6 +520,13 @@ function snapshotName(requestPath: string): string {
     throw new HTTPException(400, { message: "Invalid snapshot name" });
   }
   return validSnapshotName(decoded);
+}
+
+/** Whether this is one of the two routes a browser logs in through. */
+function isLoginRoute(method: string, url: string): boolean {
+  const { pathname } = new URL(url);
+  if (pathname === LOGIN_PATH) return method === "GET" || method === "HEAD";
+  return pathname === CALLBACK_PATH && method === "POST";
 }
 
 /**

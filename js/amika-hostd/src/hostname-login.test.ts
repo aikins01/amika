@@ -44,6 +44,8 @@ async function tunnelledHost() {
   } as unknown as MachineRuntime;
   const registry = memoryServiceRegistry();
   registry.set("demo", { web: 3000 });
+  // Another rig on the same host, for a request that must never reach it.
+  registry.set("other", { admin: 4000 });
   const guest = vi.fn<typeof fetch>(
     async (url) => new Response(`guest ${url}`),
   );
@@ -255,6 +257,35 @@ describe("a rig's service at its own hostname", () => {
     expect(handshake).not.toContain("evil.example");
     expect(handshake).toContain(`host: ${NAME}`);
   });
+
+  it.each([
+    ["POST", "/__amika/login"],
+    ["PUT", "/__amika/login"],
+    ["GET", "/__amika/callback"],
+  ])(
+    "never routes %s %s by a cookie the page set itself",
+    async (method, path) => {
+      // A page can write `__Host-amika-preview` on its own origin. Were a
+      // login path with the wrong method to fall through to the catch-all,
+      // that cookie would route it to another rig, readable by the page.
+      const { guest, send } = await tunnelledHost();
+      const session = `__Host-amika-session=${await signSession(SECRET, { origin: ORIGIN, user: "u" })}`;
+
+      const answer = await send(
+        path,
+        {
+          cookie: `${session}; __Host-amika-preview=other/admin`,
+          "sec-fetch-site": "same-origin",
+          "sec-fetch-mode": "cors",
+          "content-type": "application/x-www-form-urlencoded",
+        },
+        { method, body: method === "GET" ? undefined : "x=1" },
+      );
+
+      expect(answer.status).toBe(404);
+      expect(guest).not.toHaveBeenCalled();
+    },
+  );
 
   it("takes no host key at the service's name, as none could arrive", async () => {
     // The proxy and the gateway drop a caller's `x-amika-` headers, so a
