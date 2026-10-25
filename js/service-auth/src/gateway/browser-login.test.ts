@@ -364,32 +364,51 @@ describe("a request named by its hostname", () => {
     );
   });
 
-  it("forwards a caller with a service token for this rig and service", async () => {
+  it("takes no host key or service token: no hop passes them to a name", async () => {
+    // The reverse proxy and the gateway both drop a caller's `x-amika-`
+    // headers, so these could never arrive. One that somehow did must not
+    // open a door the deployed path does not have.
     const token = await signServiceToken(SECRET, {
       rig: "demo",
       service: "web",
     });
-    expect(
-      await gateway.authorize(
-        named("/api", { "X-Amika-Authorization": `Bearer ${token}` }),
-      ),
-    ).toMatchObject({
-      kind: "forward",
-      surface: "service",
-      route: { machine: "demo", service: "web", path: "/api" },
-    });
+    const credentials: Record<string, string>[] = [
+      { "X-Amika-Authorization": `Bearer ${token}` },
+      { "X-Amika-Hostd-Key": SECRET },
+    ];
+    for (const credential of credentials) {
+      expect(await gateway.authorize(named("/api", credential))).toMatchObject({
+        kind: "refuse",
+        status: 401,
+      });
+    }
   });
 
-  it("refuses a service token for another service", async () => {
-    const token = await signServiceToken(SECRET, {
-      rig: "demo",
-      service: "api",
-    });
-    expect(
-      await gateway.authorize(
-        named("/", { "X-Amika-Authorization": `Bearer ${token}` }),
-      ),
-    ).toMatchObject({ kind: "refuse", status: 401 });
+  it("refuses a frame another rig's page loads, even with a session", async () => {
+    // Every rig shares the zone, so a sibling is the same site and the
+    // `Lax` session rides along. A frame could be laid invisibly over the
+    // sibling's own page.
+    const decision = await gateway.authorize(
+      named("/admin", {
+        "Sec-Fetch-Site": "same-site",
+        "Sec-Fetch-Mode": "navigate",
+        "Sec-Fetch-Dest": "iframe",
+        Cookie: await session(NAMED_ORIGIN),
+      }),
+    );
+    expect(decision).toMatchObject({ kind: "refuse", status: 403 });
+  });
+
+  it("follows a link from another rig's page", async () => {
+    const decision = await gateway.authorize(
+      named("/", {
+        "Sec-Fetch-Site": "same-site",
+        "Sec-Fetch-Mode": "navigate",
+        "Sec-Fetch-Dest": "document",
+        Cookie: await session(NAMED_ORIGIN),
+      }),
+    );
+    expect(decision).toMatchObject({ kind: "forward" });
   });
 
   it("never lets a browser session reach amikad at its name", async () => {
@@ -414,18 +433,11 @@ describe("a request named by its hostname", () => {
       kind: "refuse",
       status: 404,
     });
-    // A service token is refused for amikad, as on its route.
-    const token = await signServiceToken(SECRET, {
-      rig: "demo",
-      service: "amikad",
-    });
-    expect(
-      await amikad({ "X-Amika-Authorization": `Bearer ${token}` }),
-    ).toMatchObject({ kind: "refuse", status: 401 });
-    // The host key still does.
+    // Nor the host key: amikad is reached at its service route, never at
+    // a name.
     expect(await amikad({ "X-Amika-Hostd-Key": SECRET })).toMatchObject({
-      kind: "forward",
-      surface: "service",
+      kind: "refuse",
+      status: 404,
     });
   });
 

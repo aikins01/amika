@@ -20,9 +20,10 @@
  * - A request the server names (`GatewayRequest.named`): one that reached
  *   a service at its own hostname, `<service>--<rig>.r.<org>.o.<zone>`.
  *   Every path on that origin is the service's, but for the two login
- *   endpoints. It takes the host key or a service token, as a service
- *   route does, or a browser session for that origin, as a preview does.
- *   No cookie routes it, and none is set: the origin is the route.
+ *   endpoints. It takes a browser session for that origin, as a preview
+ *   does, and nothing else: no hop in front of it passes a caller's
+ *   `x-amika-` credential headers. No cookie routes it, and none is set:
+ *   the origin is the route.
  *
  * Every credential is the gateway's: the server forwards none of them
  * (`isCredentialHeader`, `guestCookies`), it drops a guest's `Set-Cookie`
@@ -201,7 +202,7 @@ export function createGateway({
         if (previews && isLoginEndpoint(url.pathname)) {
           return { kind: "not-mine" };
         }
-        return authorizeNamed(request, request.named, credentials, upgrade);
+        return authorizeNamed(request, request.named, upgrade);
       }
 
       // A root-relative URL a page opened through a link asks for.
@@ -445,52 +446,47 @@ export function createGateway({
    * Who may have a request its server named by hostname. The path is the
    * guest's, whole: the origin already says which service it is for.
    *
-   * A caller with the host key or a service token is checked as on the
-   * service route, so the control plane and a scripted client reach the
-   * service at its name too. A browser needs a session for this origin, and
-   * logs in at this origin, then comes back to the same path. The login
-   * endpoints never reach here (`isLoginEndpoint`).
+   * A browser session for this origin, and nothing else. The host key and a
+   * service token travel in `x-amika-` headers, and every hop in front of a
+   * named request (the reverse proxy, then the gateway) removes those from
+   * what a caller sends, so neither could arrive here: a scripted caller
+   * uses the service route instead. A browser without a session logs in at
+   * this origin and comes back to the same path. The login endpoints never
+   * reach here (`isLoginEndpoint`).
    */
   async function authorizeNamed(
     request: GatewayRequest,
     named: Pick<ServiceRoute, "machine" | "service">,
-    credentials: {
-      key: string | null;
-      token: string | null;
-      authorization: string | null;
-    },
     upgrade: boolean,
   ): Promise<GatewayDecision> {
     const { url, headers } = request;
     const route = { ...named, path: url.pathname };
-    if (credentials.key !== null || credentials.token !== null) {
-      const refusal = await authorizeServiceRouteRequest(
-        secretKey,
-        route,
-        credentials,
-      );
-      if (refusal) {
-        return {
-          kind: "refuse",
-          surface: "service",
-          status: refusal,
-          ...(refusal === 401 ? tokenHint(route, credentials.token) : {}),
-        };
-      }
-      return forward("service", route, { setCookies: [] });
-    }
-    // amikad runs commands in the rig. It takes the host key and nothing
-    // else, as it has no preview: a browser session, which every member of
-    // the organization can get, must not reach it at its name either.
+    // amikad runs commands in the rig and has no preview. A browser session,
+    // which every member of the organization can get, must not reach it at
+    // its name, and nothing else reaches a name.
     if (named.service === AMIKAD_SERVICE) {
       return { kind: "refuse", surface: "service", status: 404 };
+    }
+    // Every rig of every organization shares the zone, so another
+    // organization's rig is the same site as this one, and the `Lax`
+    // session goes with what its pages load. A page load from there is a
+    // link followed; anything else it loads here (a frame, which could be
+    // laid invisibly over its own page, or a script) is refused, session
+    // or not.
+    const site = headers.get("sec-fetch-site");
+    if (
+      !upgrade &&
+      (site === "same-site" || site === "cross-site") &&
+      headers.get("sec-fetch-dest") !== "document"
+    ) {
+      return { kind: "refuse", surface: "preview", status: 403 };
     }
     if (!previews) {
       return {
         kind: "refuse",
         surface: "preview",
         status: 401,
-        hint: "This host serves no browser login. Send a service token.",
+        hint: "This host serves no browser login. Reach the service at its service route with a service token.",
       };
     }
     if (!(await hasSession(headers.get("cookie"), url, secretKey))) {
@@ -505,13 +501,10 @@ export function createGateway({
         kind: "refuse",
         surface: "preview",
         status: 401,
-        hint: "Open the page in a browser to log in through Amika, or send a service token.",
+        hint: "Open the page in a browser to log in through Amika. A scripted caller uses the service route with a service token.",
       };
     }
-    // Every rig of every organization shares the zone, so a sibling's page
-    // is the same site as this one, and the `Lax` session goes with its
-    // requests. Only this origin's own requests, and page loads, are let
-    // through.
+    // Only this origin's own requests, and page loads, are let through.
     if (!isOwnOrPageLoad(request, { upgrade })) {
       return { kind: "refuse", surface: "preview", status: 403 };
     }

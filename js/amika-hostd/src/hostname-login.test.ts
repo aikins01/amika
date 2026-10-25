@@ -7,7 +7,12 @@
  * browser at `web--demo.r.acme.o.amika.test` takes.
  */
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { request as httpRequest } from "node:http";
+import {
+  createServer as createHttpServer,
+  request as httpRequest,
+  type Server as HttpServer,
+} from "node:http";
+import { getRequestListener } from "@hono/node-server";
 import { createServer, type AddressInfo, type Server } from "node:net";
 import { signLoginPass } from "@amika/service-auth/credentials";
 import { createApp } from "./app.js";
@@ -45,50 +50,69 @@ async function tunnelledHost() {
     fetch: guest,
   });
   const tunnel = virtualServer({ fetch: app.fetch });
-  const server = createServer((socket) => tunnel.accept(socket));
-  servers.push(server);
-  await new Promise<void>((ready) => server.listen(0, "127.0.0.1", ready));
-  const { port } = server.address() as AddressInfo;
+  const port = await listen(createServer((socket) => tunnel.accept(socket)));
+  // The same app on an ordinary listening socket, as listen mode serves it.
+  const listenerPort = await listen(
+    createHttpServer(getRequestListener(app.fetch)),
+  );
 
   /** One request down the "tunnel", with the gateway's headers. */
-  function send(
+  const send = (
     path: string,
     headers: Record<string, string> = {},
-    { method = "GET", body }: { method?: string; body?: string } = {},
-  ) {
-    return new Promise<{
-      status: number;
-      location?: string;
-      cookies: string[];
-      body: string;
-    }>((resolve, reject) => {
-      const req = httpRequest(
-        {
-          host: "127.0.0.1",
-          port,
-          method,
-          path,
-          headers: { host: NAME, ...NAMED, ...headers },
-        },
-        (res) => {
-          let text = "";
-          res.on("data", (chunk: Buffer) => (text += chunk.toString()));
-          res.on("end", () =>
-            resolve({
-              status: res.statusCode ?? 0,
-              location: res.headers.location,
-              cookies: res.headers["set-cookie"] ?? [],
-              body: text,
-            }),
-          );
-        },
-      );
-      req.on("error", reject);
-      if (body !== undefined) req.write(body);
-      req.end();
-    });
-  }
-  return { app, guest, send };
+    options: { method?: string; body?: string } = {},
+  ) => sendTo(port, path, headers, options);
+  /** The same request to the listener, carrying the same headers. */
+  const sendToListener = (path: string, headers: Record<string, string> = {}) =>
+    sendTo(listenerPort, path, headers);
+  return { guest, send, sendToListener };
+}
+
+/** Start `server` on a free loopback port, closed after the test. */
+async function listen(server: Server | HttpServer): Promise<number> {
+  servers.push(server);
+  await new Promise<void>((ready) => server.listen(0, "127.0.0.1", ready));
+  return (server.address() as AddressInfo).port;
+}
+
+/** One request to `port`, with the gateway's headers and `headers`. */
+function sendTo(
+  port: number,
+  path: string,
+  headers: Record<string, string> = {},
+  { method = "GET", body }: { method?: string; body?: string } = {},
+) {
+  return new Promise<{
+    status: number;
+    location?: string;
+    cookies: string[];
+    body: string;
+  }>((resolve, reject) => {
+    const req = httpRequest(
+      {
+        host: "127.0.0.1",
+        port,
+        method,
+        path,
+        headers: { host: NAME, ...NAMED, ...headers },
+      },
+      (res) => {
+        let text = "";
+        res.on("data", (chunk: Buffer) => (text += chunk.toString()));
+        res.on("end", () =>
+          resolve({
+            status: res.statusCode ?? 0,
+            location: res.headers.location,
+            cookies: res.headers["set-cookie"] ?? [],
+            body: text,
+          }),
+        );
+      },
+    );
+    req.on("error", reject);
+    if (body !== undefined) req.write(body);
+    req.end();
+  });
 }
 
 /** `name=value` of the cookie `name` in `cookies`. */
@@ -157,25 +181,26 @@ describe("a rig's service at its own hostname", () => {
     expect(guest).not.toHaveBeenCalled();
   });
 
-  it("serves a caller holding the host key at the service's name", async () => {
-    const { send } = await tunnelledHost();
+  it("takes no host key at the service's name, as none could arrive", async () => {
+    // The proxy and the gateway drop a caller's `x-amika-` headers, so a
+    // key sent to a name never reaches hostd. One that did must not open
+    // the rig, let alone hostd's own API under the service's path.
+    const { guest, send } = await tunnelledHost();
 
     const answer = await send("/v0beta1/rigs", {
       "x-amika-hostd-key": SECRET,
     });
 
-    expect(answer.status).toBe(200);
-    expect(answer.body).toBe("guest http://127.0.0.1:41001/v0beta1/rigs");
+    expect(answer.status).toBe(401);
+    expect(guest).not.toHaveBeenCalled();
   });
 
   it("does not name a request that reached a listener with the same headers", async () => {
     // On a listening socket the headers are anybody's. The app must treat
     // the request as one for its own API, and want the key for it.
-    const { app, guest } = await tunnelledHost();
+    const { guest, sendToListener } = await tunnelledHost();
 
-    const answer = await app.request(`https://${NAME}/app`, {
-      headers: { ...NAMED, ...NAVIGATE },
-    });
+    const answer = await sendToListener("/app", NAVIGATE);
 
     expect(answer.status).toBe(401);
     expect(guest).not.toHaveBeenCalled();

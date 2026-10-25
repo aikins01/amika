@@ -252,18 +252,23 @@ machine list, so the app sends it to the service before any of its own
 routes can match. The exceptions are `/__amika/login` and
 `/__amika/callback`, which are how a browser logs in to that origin.
 
-Who may have it is the gateway's to decide, as for any service:
+Who may have it is the gateway's to decide. At a name, that is a browser
+session for that origin and nothing else:
 
-- The host key or a service token, as on the service route.
-- Otherwise a browser session for that origin. A page load without one is
-  sent to log in at the same origin and comes back to the same path. Amika
-  checks the origin names a rig of the user's organization on this host,
-  and posts the pass to that origin's callback.
+- A page load without a session is sent to log in at the same origin and
+  comes back to the same path. Amika checks the origin names a rig of the
+  user's organization on this host, and posts the pass to that origin's
+  callback.
+- The host key and service tokens travel in `x-amika-` headers, which the
+  reverse proxy and the gateway both drop from what a caller sends, so
+  neither reaches a name. A scripted caller uses the service route.
+- `amikad` is never reachable at its name.
 
 Each service is its own origin, so each logs in once, and no cookie has to
 say which service the root belongs to. Every rig shares the zone, so a
-sibling's page is the same site; as for a preview, only the origin's own
-requests and page loads are let through.
+sibling's page is the same site and the session goes with what it loads:
+only the origin's own requests and page loads are let through, and a frame
+or script another site loads is refused even with a session.
 
 A request with neither header is the control plane calling this daemon's
 API, and is left alone. One with only one of them, or a name that is not a
