@@ -68,6 +68,28 @@ Each of these is stated in full, with its reason, in the doc it links to.
   the versions served and the features a control plane may rely on. See
   [API versions](docs/api-and-auth.md#api-versions).
 
+**The outbound tunnel**
+
+- **The attachment credential is a third secret**, not the API key and not
+  the secret key. Attaching a host is a different permission from acting as
+  the user and from authorizing Amika's requests into this daemon. It never
+  goes in `config.toml`, which `setup` rewrites and operators copy between
+  machines. See [Outbound tunnel](docs/tunnel.md#decisions).
+- **A dead tunnel is found by a yamux ping with a deadline**, not by a
+  WebSocket ping and not by the multiplexer's own keep-alive, which
+  swallows an unanswered ping. A closed laptop lid leaves a socket that
+  looks alive, and only an unanswered round trip finds it.
+- **Shutdown closes the WebSocket**, which is what makes the gateway give
+  up the route. Dropping the connection loses every request sent before the
+  gateway notices.
+- **hostd opens no streams.** The gateway opens one per request; a stream in
+  the other direction would make the gateway a forward proxy for this host.
+  `maxOutboundStreams` is zero at this end and `maxInboundStreams` is zero
+  at the gateway's.
+- **`maxFrameBytes` must equal the gateway's.** Nothing negotiates the
+  window, and a host with a larger one loses its tunnel on its first
+  full-size frame.
+
 **Credentials reaching hostd**
 
 - **The host key never reaches a browser.** A browser uses a signed service
@@ -99,8 +121,9 @@ Each of these is stated in full, with its reason, in the doc it links to.
   stdin, never in the process list. See
   [Secret storage](docs/setup-and-secrets.md#secret-storage).
 - **The daemon holds only the secret key, and never reads the store.** `up`
-  reads the secrets and hands the secret key over IPC; neither secret goes in
-  the daemon's environment. smolvm, rigs, the snapshot pack subprocess and
+  reads the secrets and hands the secret key over IPC, with the tunnel
+  attachment credential in tunnel mode; no secret goes in the daemon's
+  environment. smolvm, rigs, the snapshot pack subprocess and
   the smolvm version check never see either secret.
 - **Secrets stay out of files and messages they do not belong in.** The API
   key never comes from TOML. Config and secret files are replaced atomically
@@ -169,3 +192,7 @@ Each of these is stated in full, with its reason, in the doc it links to.
 - [docs/snapshots.md](docs/snapshots.md) — read when changing snapshot capture
   or storage (`snapshots.ts`, `snapshot-store.ts`) or how a create resolves
   its source (`requests.ts`).
+- [docs/tunnel.md](docs/tunnel.md) — read when changing the outbound tunnel
+  (`tunnel-*.ts`): the WSS handshake, the yamux session, liveness,
+  reconnection, or where the attachment credential and gateway address come
+  from.

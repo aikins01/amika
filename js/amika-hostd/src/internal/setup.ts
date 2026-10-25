@@ -8,6 +8,7 @@
 import { randomBytes } from "node:crypto";
 import { hostname as osHostname } from "node:os";
 import {
+  type RegisteredHost,
   registerHost as registerHostWithAmika,
   setHostSecret as setHostSecretInAmika,
 } from "./amika-api.js";
@@ -250,7 +251,7 @@ export async function runSetup(
       sending = true;
       // Ctrl-C would otherwise end the process mid-request, before the old
       // key goes back; instead it cancels the request like any failure.
-      const created = await whileInterruptible(deps, (cancel) =>
+      const { created } = await whileInterruptible(deps, (cancel) =>
         sendSecret(
           { apiUrl: effective.apiUrl, apiKey: sendWith },
           written,
@@ -329,7 +330,10 @@ export async function runSetup(
 
 /**
  * Give Amika `input.secretKey` for this hostname: registering it if new,
- * else replacing the stored secret. Returns whether it registered the host.
+ * else replacing the stored secret.
+ *
+ * Returns the host as well as whether it was created. Tunnel enrolment
+ * needs the id, and this is the only call that learns it.
  */
 async function sendSecret(
   api: { apiUrl: string; apiKey: string },
@@ -337,14 +341,14 @@ async function sendSecret(
   input: { hostname: string; secretKey: string },
   deps: SetupDeps,
   cancel: AbortSignal,
-): Promise<boolean> {
+): Promise<{ host: RegisteredHost; created: boolean }> {
   const { host, created } = await (deps.registerHost ?? registerHostWithAmika)(
     api,
     { ...input, sizes: config.sizes },
     undefined,
     cancel,
   );
-  if (created) return true;
+  if (created) return { host, created };
   await (deps.setHostSecret ?? setHostSecretInAmika)(
     api,
     host,
@@ -352,7 +356,7 @@ async function sendSecret(
     undefined,
     cancel,
   );
-  return false;
+  return { host, created };
 }
 
 /**

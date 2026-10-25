@@ -23,7 +23,12 @@ import {
   type HostdConfigWith,
   type HostdFlags,
 } from "./config.js";
+import path from "node:path";
 import { openSecrets as openSecretStore, type Secrets } from "./credentials.js";
+import { startTunnel as startTunnelOut } from "./tunnel-runner.js";
+import { readTunnelEnrolment, tunnelEnrolmentPath } from "./tunnel-target.js";
+import { enrolForTunnel, type EnrolForTunnelDeps } from "./tunnel-enrol.js";
+import type { TunnelEvent } from "./tunnel-client.js";
 import {
   DaemonError,
   claimPidFile as claimPidFileOnDisk,
@@ -33,7 +38,8 @@ import {
   isDaemonRunning,
   isSmolvmRunning as isSmolvmProcess,
   notifyReady as notifyParent,
-  receiveSecretKey as receiveSecretKeyFromUp,
+  receiveSecrets as receiveSecretsFromUp,
+  type HandedSecrets,
   readRunningPid,
   removeSmolvmFiles,
   removeStaleSmolvmFiles,
@@ -110,6 +116,8 @@ export interface CliDeps {
   shutdownSignal: () => Promise<void>;
   loadConfigFile?: typeof loadConfigFileFromDisk;
   startServer?: typeof startServerOnPort;
+  /** Serves over a tunnel instead of a port; defaults to `startTunnel`. */
+  startTunnel?: typeof startTunnelOut;
   startInBackground?: typeof spawnInBackground;
   startSmolvm?: typeof startSmolvmServe;
   /** The installed smolvm's version, for `up`'s warning about an old one. */
@@ -146,10 +154,13 @@ export interface CliDeps {
     env: NodeJS.ProcessEnv,
   ) => Secrets;
   /** How a background daemon gets the secret key from the `up` that started it. */
-  receiveSecretKey?: () => Promise<string>;
+  receiveSecrets?: () => Promise<HandedSecrets>;
   writeConfigFile?: SetupDeps["writeConfigFile"];
   systemHostname?: SetupDeps["systemHostname"];
   generateSecretKey?: SetupDeps["generateSecretKey"];
+  /** Tunnel enrolment; defaults to the control plane and the record file. */
+  enrol?: EnrolForTunnelDeps["enrol"];
+  write?: EnrolForTunnelDeps["write"];
 }
 
 export { PromptCancelled };
@@ -218,6 +229,7 @@ export async function runCli(
         // Alongside registration, so a slow smolvm never delays it.
         const checkedSmolvm = warnOldSmolvm(deps);
         const host = await register(config, deps);
+        if (config.transport === "tunnel") await enrol(config, host, deps);
         await checkedSmolvm;
         // Read before the daemon starts, which records each image it pulls.
         const pending = pendingImages(
@@ -226,7 +238,7 @@ export async function runCli(
         );
         // Start the daemon first, so the operator can expose it (and check the
         // tunnel reaches it) before giving Amika its public URL.
-        const finish = (port: number) => {
+        const finish = (port: number | undefined) => {
           announcePrepull(pending, deps, { foreground: parsed.fg });
           return completeRegistration(config, host, port, deps);
         };
@@ -249,20 +261,21 @@ export async function runCli(
         }
       }
       case "serve": {
-        // A daemon `up` started gets the secret key from it; run by hand, it
+        // A daemon `up` started gets its secrets from it; run by hand, it
         // reads the secret store itself.
-        const secretKey = parsed.secretKeyFromUp
-          ? await (deps.receiveSecretKey ?? receiveSecretKeyFromUp)()
+        const handed = parsed.secretKeyFromUp
+          ? await (deps.receiveSecrets ?? receiveSecretsFromUp)()
           : undefined;
         const config =
-          secretKey === undefined
+          handed === undefined
             ? placedSecrets(
                 withSecrets(resolved, deps, { apiKey: false }),
                 deps,
               )
-            : { ...resolved, secretKey };
+            : { ...resolved, secretKey: handed.secretKey };
         await serveInForeground(requireSettings(config, ["secretKey"]), deps, {
           smolvm: parsed.smolvm,
+          tunnelSecrets: handed && handedTunnelSecrets(handed),
         });
         break;
       }
@@ -724,13 +737,198 @@ const FINISH_LATER =
  * remind them where Amika expects to reach it. Returns false if saving the
  * URL failed; the daemon keeps running either way.
  */
+
+/**
+ * Serve this host by dialling the gateway, and wait until it has.
+ *
+ * The counterpart of `listen`. It returns only once the gateway has kept
+ * the connection, because `up` reports readiness from this and a daemon
+ * that said "serving" while still retrying would send an operator
+ * looking for the rig rather than for the reason it cannot attach.
+ *
+ * A dial that never succeeds therefore fails startup, with whatever
+ * `resolveTunnelTarget` or the client said -- which names the missing
+ * enrolment, the missing credential, or the gateway's refusal.
+ */
+async function dialOut(
+  config: HostdConfigWith<"secretKey">,
+  paths: DaemonPaths,
+  usedPrepullNames: ReadonlySet<string>,
+  deps: CliDeps,
+  {
+    secrets: handed,
+    ...packing
+  }: {
+    smolvm?: string;
+    signal: AbortSignal;
+    /** What `up` handed a background daemon; else the store is opened. */
+    secrets?: Pick<Secrets, "attachmentCredential">;
+  },
+): Promise<{
+  port?: undefined;
+  connectionId?: string;
+  close: () => Promise<void>;
+}> {
+  // The same provider runtime a listener uses: a tunnel changes how the
+  // daemon is reached, not what it runs.
+  const runtime = providerRuntime({
+    apiUrl: config.smolApiUrl ?? DEFAULT_SMOL_API_URL,
+    requestTimeoutMs: config.smolRequestTimeoutMs,
+  });
+  const secrets =
+    handed ??
+    (deps.openSecrets ?? openSecretStore)(config.secretStore, deps.env);
+  const enrolmentFile = enrolmentFileFor(config, deps);
+  const tunnel = (deps.startTunnel ?? startTunnelOut)(
+    config,
+    runtime,
+    secrets,
+    () => readTunnelEnrolment(enrolmentFile),
+    {
+      ...handlerOptions(config, paths, usedPrepullNames, deps, packing),
+      // For the life of the daemon, not just startup: a tunnel that drops,
+      // or that the gateway later refuses, must say so in the log.
+      onEvent: (event) => logTunnelEvent(event, deps),
+    },
+  );
+  try {
+    // A shutdown during startup ends the wait at once, rather than after
+    // the attach timeout while the gateway is unreachable.
+    const attached = await Promise.race([
+      tunnel.whenAttached(),
+      abortedBy(packing.signal),
+    ]);
+    return {
+      connectionId: attached.connectionId,
+      close: () => tunnel.close(),
+    };
+  } catch (error) {
+    // Nothing is serving, so leave nothing dialling behind.
+    await tunnel.close();
+    if (packing.signal.aborted) return { close: async () => {} };
+    throw error;
+  }
+}
+
+/**
+ * Enrol a tunnel host with its gateway: the credential into the secret
+ * store, and the gateway's address and generation into the record beside
+ * the config.
+ *
+ * On every `up`, right after registering, and not only when setup rotates
+ * the secret key: a host set up fresh, or one whose operator kept the key,
+ * would otherwise never be enrolled and could not dial. Repeating it is
+ * harmless, because Amika answers with the credential it already holds.
+ *
+ * After registering, because enrolment names the host, and apart from the
+ * secret key's rotation, so a failure here never rolls back a key Amika
+ * has already taken.
+ */
+async function enrol(
+  config: RegistrationConfig,
+  host: RegisteredHost,
+  deps: CliDeps,
+): Promise<void> {
+  const enrolment = await enrolForTunnel(
+    { apiUrl: config.apiUrl, apiKey: config.apiKey },
+    host,
+    (deps.openSecrets ?? openSecretStore)(config.secretStore, deps.env),
+    enrolmentFileFor(config, deps),
+    deps,
+  );
+  deps.out(
+    `Enrolled host ${host.hostname} for tunnel mode; it will dial ${enrolment.gatewayUrl}`,
+  );
+}
+
+/**
+ * Where this host's enrolment record lives: beside the config it loaded,
+ * where setup writes it and `credentials.ts` keeps file secrets. The first
+ * candidate path only when no config file was loaded at all, as setup
+ * would then write there too.
+ */
+function enrolmentFileFor(
+  config: { configPath?: string },
+  deps: Pick<CliDeps, "env">,
+): string {
+  return tunnelEnrolmentPath(
+    path.dirname(config.configPath ?? configFilePaths(deps.env)[0]),
+  );
+}
+
+/**
+ * A read-only store holding the tunnel credential `up` handed over IPC, so
+ * a background daemon never opens the secret store itself.
+ */
+function handedTunnelSecrets(
+  handed: HandedSecrets,
+): Pick<Secrets, "attachmentCredential"> {
+  return {
+    attachmentCredential: {
+      description: "what `amika-hostd up` handed this daemon",
+      get: () => handed.attachmentCredential,
+      set: () => {
+        throw new Error("a background daemon never writes the secret store");
+      },
+    },
+  };
+}
+
+/** Rejects when `signal` aborts; never resolves. */
+function abortedBy(signal: AbortSignal): Promise<never> {
+  return new Promise((_, reject) => {
+    const abort = () => reject(new Error("shutdown requested"));
+    if (signal.aborted) abort();
+    else signal.addEventListener("abort", abort, { once: true });
+  });
+}
+
+/**
+ * What the tunnel did, in the daemon's log. Dialling is left out: a retry
+ * says why it is waiting, and an attachment says it attached.
+ */
+function logTunnelEvent(event: TunnelEvent, deps: CliDeps): void {
+  switch (event.type) {
+    case "dialing":
+    case "stopped":
+      return;
+    case "attached":
+      deps.out(
+        `amika-hostd: attached to the gateway${event.info.connectionId ? ` (connection ${event.info.connectionId})` : ""}`,
+      );
+      return;
+    case "detached":
+      deps.err(
+        `amika-hostd: the tunnel to the gateway closed after ${Math.round(event.uptimeMs / 1000)}s: ${event.reason}`,
+      );
+      return;
+    case "waiting":
+      deps.err(
+        `amika-hostd: reconnecting to the gateway in ${Math.round(event.delayMs / 1000)}s (attempt ${event.attempt}): ${event.reason}`,
+      );
+      return;
+    case "suspect-credential":
+      deps.err(
+        `amika-hostd: ${event.consecutiveShortSessions} tunnels in a row closed before serving anything; this host's credential may have been revoked. Run \`amika-hostd up\` to enrol it again.`,
+      );
+      return;
+    case "rejected":
+      deps.err(
+        `amika-hostd: the gateway refused this host and it will not retry: ${event.reason}`,
+      );
+      return;
+    default:
+      assertNever(event);
+  }
+}
+
 async function completeRegistration(
   config: RegistrationConfig,
   host: RegisteredHost,
-  port: number,
+  /** Absent on a tunnel host, which binds nothing. */
+  port: number | undefined,
   deps: CliDeps,
 ): Promise<boolean> {
-  const local = localUrl(config.host, port);
   // Only a listening host registers a URL. Amika assigns the address of one
   // it reaches any other way, and `register-url` on such a host is refused,
   // so there is nothing here for the operator to finish; asking would walk
@@ -749,6 +947,13 @@ async function completeRegistration(
     );
     return true;
   }
+  // Below the guard, because a tunnel host has no port to build one from
+  // and returns above. A listener without one is this file disagreeing
+  // with itself rather than anything the operator did.
+  if (port === undefined) {
+    throw new Error("A listening host reported no port to register");
+  }
+  const local = localUrl(config.host, port);
   if (host.url !== null) {
     deps.out(
       `Amika reaches this host at ${host.url}; make sure it is exposed there and forwards to ${local}.`,
@@ -853,10 +1058,21 @@ async function startBackground(
       isRunning: deps.isRunning,
       env: withoutEnv(deps.env, [...ENV_NAMES.apiKey, ...ENV_NAMES.secretKey]),
       secretKey: config.secretKey,
+      // Read here, where a keychain prompt can reach the operator, and
+      // handed over with the secret key.
+      attachmentCredential:
+        config.transport === "tunnel"
+          ? (deps.openSecrets ?? openSecretStore)(
+              config.secretStore,
+              deps.env,
+            ).attachmentCredential.get()
+          : undefined,
     },
   );
   deps.out(
-    `amika-hostd started in the background on port ${port} (pid ${pid})`,
+    port === undefined
+      ? `amika-hostd started in the background over a tunnel (pid ${pid})`
+      : `amika-hostd started in the background on port ${port} (pid ${pid})`,
   );
   deps.out(`Logs: ${paths.logFile}`);
   deps.out("To stop the daemon and its VMs, run `amika-hostd down`.");
@@ -874,7 +1090,16 @@ async function serveInForeground(
   {
     smolvm = false,
     afterStart,
-  }: { smolvm?: boolean; afterStart?: (port: number) => Promise<unknown> } = {},
+    tunnelSecrets,
+  }: {
+    smolvm?: boolean;
+    afterStart?: (port: number | undefined) => Promise<unknown>;
+    /**
+     * The tunnel credential `up` handed this daemon. Absent when the
+     * daemon runs by hand, and reads the secret store itself.
+     */
+    tunnelSecrets?: Pick<Secrets, "attachmentCredential">;
+  } = {},
 ) {
   const paths = daemonPaths(deps.env);
   const claim = deps.claimPidFile ?? claimPidFileOnDisk;
@@ -885,7 +1110,15 @@ async function serveInForeground(
   const interrupted = new AbortController();
   void signalled.then(() => interrupted.abort());
   let runtime: ManagedSmolvm | undefined;
-  let server: RunningServer | undefined;
+  /**
+   * Whichever transport this host serves on.
+   *
+   * A listener reports the port it bound; a tunnel reports none, because
+   * it binds nothing. Everything after startup needs only `close`.
+   */
+  let server:
+    | { port?: number; connectionId?: string; close: () => Promise<void> }
+    | undefined;
   // Every throwaway machine name the pre-pull uses. Each is random, so
   // hiding them all, deleted or not, never hides a rig.
   const usedPrepullNames = new Set<string>();
@@ -914,18 +1147,40 @@ async function serveInForeground(
         : config;
       // Only a daemon running its own smolvm can pack a snapshot: a pack
       // is a subprocess of that binary, reading the same machine state.
-      server = await listen(serving, paths, usedPrepullNames, deps, {
-        smolvm: runtime?.binary,
-        signal: interrupted.signal,
-      });
+      server =
+        config.transport === "tunnel"
+          ? await dialOut(serving, paths, usedPrepullNames, deps, {
+              smolvm: runtime?.binary,
+              signal: interrupted.signal,
+              secrets: tunnelSecrets,
+            })
+          : await listen(serving, paths, usedPrepullNames, deps, {
+              smolvm: runtime?.binary,
+              signal: interrupted.signal,
+            });
     }
     // Signalled during startup: stop without telling `up` it is ready.
     if (server === undefined || interrupted.signal.aborted) {
       await stopAll();
       return;
     }
-    deps.out(`amika-hostd listening on ${localUrl(config.host, server.port)}`);
-    await (deps.notifyReady ?? notifyParent)(server.port);
+    if (server.port === undefined) {
+      // Said once it is attached, not once it is dialling. `up` waits on
+      // this, and an operator told "serving" by a daemon that is still
+      // retrying would go looking for the rig rather than for the
+      // reason it cannot attach.
+      deps.out(
+        "amika-hostd is serving over a tunnel; Amika assigns its address.",
+      );
+      await (deps.notifyReady ?? notifyParent)({
+        connectionId: server.connectionId,
+      });
+    } else {
+      deps.out(
+        `amika-hostd listening on ${localUrl(config.host, server.port)}`,
+      );
+      await (deps.notifyReady ?? notifyParent)({ port: server.port });
+    }
     // Only a daemon running its own smolvm fills that smolvm's image cache.
     if (runtime) {
       (deps.prepull ?? prepullOn)(runtime.apiUrl, {
@@ -1074,33 +1329,54 @@ async function listen(
     requestTimeoutMs: config.smolRequestTimeoutMs,
   });
   try {
-    return await (deps.startServer ?? startServerOnPort)(config, runtime, {
-      servicesFile: paths.servicesFile,
-      snapshots: packing.smolvm
-        ? {
-            directory: config.snapshotDir ?? paths.snapshotDir,
-            indexFile: paths.snapshotIndexFile,
-            smolvm: packing.smolvm,
-            // As smolvm itself is started: never with the daemon's keys.
-            env: withoutEnv(deps.env, [
-              ...ENV_NAMES.apiKey,
-              ...ENV_NAMES.secretKey,
-            ]),
-            err: deps.err,
-            signal: packing.signal,
-          }
-        : undefined,
-      // This run's throwaway machines, deleted or not, so a list caught
-      // mid-create or mid-delete still hides them, and any an earlier run
-      // left behind.
-      hiddenMachines: () =>
-        new Set([...usedPrepullNames, ...prepullMachines(paths.prepullFile)]),
-    });
+    return await (deps.startServer ?? startServerOnPort)(
+      config,
+      runtime,
+      handlerOptions(config, paths, usedPrepullNames, deps, packing),
+    );
   } catch (error) {
     throw new DaemonError(
       `cannot listen on ${config.host}:${config.port}: ${errorCode(error)}`,
     );
   }
+}
+
+/**
+ * What the app serves beyond the machine API, the same whichever transport
+ * reaches it: the services file, snapshots when this daemon runs its own
+ * smolvm, and pre-pull's throwaway machines kept out of the list. A tunnel
+ * changes how the daemon is reached, never what it serves, so both
+ * `listen` and `dialOut` take these from here.
+ */
+function handlerOptions(
+  config: HostdConfigWith<"secretKey">,
+  paths: DaemonPaths,
+  usedPrepullNames: ReadonlySet<string>,
+  deps: CliDeps,
+  packing: { smolvm?: string; signal?: AbortSignal },
+) {
+  return {
+    servicesFile: paths.servicesFile,
+    snapshots: packing.smolvm
+      ? {
+          directory: config.snapshotDir ?? paths.snapshotDir,
+          indexFile: paths.snapshotIndexFile,
+          smolvm: packing.smolvm,
+          // As smolvm itself is started: never with the daemon's keys.
+          env: withoutEnv(deps.env, [
+            ...ENV_NAMES.apiKey,
+            ...ENV_NAMES.secretKey,
+          ]),
+          err: deps.err,
+          signal: packing.signal,
+        }
+      : undefined,
+    // This run's throwaway machines, deleted or not, so a list caught
+    // mid-create or mid-delete still hides them, and any an earlier run
+    // left behind.
+    hiddenMachines: () =>
+      new Set([...usedPrepullNames, ...prepullMachines(paths.prepullFile)]),
+  };
 }
 
 async function stopSmolvm(runtime: ManagedSmolvm | undefined, deps: CliDeps) {
