@@ -9,7 +9,7 @@ import {
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import { AmikaApiError } from "./amika-api.js";
+import { AmikaApiError, HostTransportConflictError } from "./amika-api.js";
 import { PromptCancelled, runCli, USAGE, type CliDeps } from "./cli.js";
 import {
   ConfigError,
@@ -166,6 +166,18 @@ function harness(env: NodeJS.ProcessEnv = ENV) {
     ...memorySecrets(),
     registerHost: vi.fn(async () => ({ host: HOST, created: true })),
     setHostSizes: vi.fn(async () => HOST),
+    setHostTransport: vi.fn(
+      async (
+        _api,
+        host: { id: string; hostname: string },
+        transportMode: "listen" | "tunnel",
+      ) => ({
+        ...HOST,
+        ...host,
+        url: transportMode === "tunnel" ? null : HOST.url,
+        transport_mode: transportMode,
+      }),
+    ),
     setHostSecret: vi.fn(async () => HOST),
     setHostUrl: vi.fn(
       async (_api, host: { hostname: string }, url: string) => ({
@@ -390,10 +402,12 @@ describe("runCli", () => {
         hostname: "builder",
         secretKey: SECRET,
         sizes: {},
+        transportMode: "listen",
       },
     );
     // A new host was registered with its sizes; nothing to update.
     expect(deps.setHostSizes).not.toHaveBeenCalled();
+    expect(deps.setHostTransport).not.toHaveBeenCalled();
   });
 
   it("updates an existing host's sizes from the config", async () => {
@@ -602,7 +616,7 @@ describe("completing registration", () => {
     // operator decoding why. Name the host and the reason instead. The
     // idempotent register still runs, since that is how the transport is
     // learned; it is only the URL that never goes out.
-    const h = harness();
+    const h = harness({ ...ENV, AMIKA_HOSTD_TRANSPORT: "tunnel" });
     h.deps.registerHost.mockResolvedValue({
       host: TUNNEL_HOST,
       created: false,
@@ -619,13 +633,23 @@ describe("completing registration", () => {
     // Amika assigns the address, and `register-url` on such a host is
     // refused, so prompting would walk the operator into the one action the
     // transport forbids and then fail them for taking it.
-    const h = harness();
+    const h = harness({ ...ENV, AMIKA_HOSTD_TRANSPORT: "tunnel" });
     h.deps.registerHost.mockResolvedValue({
       host: TUNNEL_HOST,
       created: true,
     });
     const prompt = vi.fn(async (_question: string) => "https://nope.example");
-    const deps = { ...h.deps, prompt };
+    const deps = {
+      ...h.deps,
+      prompt,
+      enrol: vi.fn(async () => ({
+        credential: "amkht_b3JnXzE.s3cret",
+        generation: 1,
+        gateway_url: "wss://gateway.example/v1/host-tunnel",
+        transport_mode: "tunnel" as const,
+      })),
+      write: () => {},
+    };
 
     expect(await runCli(["up"], deps)).toBe(0);
     expect(prompt).not.toHaveBeenCalled();
@@ -815,6 +839,63 @@ describe("enrolling a tunnel host", () => {
     };
     return { ...h, deps, enrol, written };
   }
+
+  it("registers a new host in the tunnel, not as a listener", async () => {
+    const h = tunnelHost();
+
+    expect(await runCli(["up"], h.deps)).toBe(0);
+
+    expect(h.deps.registerHost).toHaveBeenCalledTimes(1);
+    expect(h.deps.registerHost).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ transportMode: "tunnel" }),
+    );
+    expect(h.deps.setHostTransport).not.toHaveBeenCalled();
+  });
+
+  it("switches a host Amika has as a listener, then enrols it", async () => {
+    // A host registered before its config chose the tunnel. Amika refuses
+    // to move it on registration, and refuses to enrol it while it listens.
+    const h = tunnelHost();
+    h.deps.registerHost.mockReset();
+    h.deps.registerHost
+      .mockRejectedValueOnce(
+        new HostTransportConflictError("failed to register the host"),
+      )
+      .mockResolvedValueOnce({ host: NEW_HOST, created: false });
+
+    expect(await runCli(["up"], h.deps)).toBe(0);
+
+    // Asked again without a transport, to learn which host it is.
+    const calls = h.deps.registerHost.mock.calls as unknown as Array<
+      [unknown, Record<string, unknown>]
+    >;
+    expect(calls[0]![1]).toHaveProperty("transportMode", "tunnel");
+    expect(calls[1]![1]).not.toHaveProperty("transportMode");
+    expect(h.deps.setHostTransport).toHaveBeenCalledWith(
+      { apiUrl: "https://app.amika.dev", apiKey: "api-key" },
+      NEW_HOST,
+      "tunnel",
+    );
+    expect(h.out).toContain("Switched host builder from listen to tunnel mode");
+    expect(h.deps.setHostTransport.mock.invocationCallOrder[0]).toBeLessThan(
+      h.enrol.mock.invocationCallOrder[0]!,
+    );
+  });
+
+  it("does not retry a registration refused for another reason", async () => {
+    const h = tunnelHost();
+    h.deps.registerHost.mockReset();
+    h.deps.registerHost.mockRejectedValueOnce(
+      new AmikaApiError("failed to register the host (forbidden: no)"),
+    );
+
+    expect(await runCli(["up"], h.deps)).toBe(1);
+
+    expect(h.deps.registerHost).toHaveBeenCalledTimes(1);
+    expect(h.deps.setHostTransport).not.toHaveBeenCalled();
+    expect(h.enrol).not.toHaveBeenCalled();
+  });
 
   it("enrols on `up`, after registering, whatever setup did", async () => {
     // A host set up fresh never rotates its key, and enrolment used to

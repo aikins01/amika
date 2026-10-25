@@ -39,7 +39,8 @@ with `node:util` `parseArgs` and takes every side effect as a dependency.
 
 Before starting the daemon, `up` calls `POST /api/v0beta1/hosts` on the Amika
 API (`src/internal/amika-api.ts`) with `Authorization: Bearer <API key>` and a
-body of `hostname`, `secret` and `sizes`. The endpoint is
+body of `hostname`, `secret`, `sizes` and `transport_mode` (the configured
+`transport`). The endpoint is
 idempotent by hostname: `201` creates the host, `200` returns the existing host
 and leaves its stored secret and sizes unchanged. Changing the local secret
 therefore never rotates it in Amika; changing the hostname registers a new
@@ -57,6 +58,18 @@ secret would make Amika's requests fail. The background daemon is spawned
 without `AMIKA_API_KEY`/`AMIKA_HOSTD_API_KEY`: it only serves, so the
 background daemon never holds the API key. `up` checks the pidfile before
 registering, so a second `up` fails without calling Amika.
+
+The config is the source of truth for the transport too, but Amika never
+moves an existing host between transports on registration: it creates a new
+host in the transport asked for, and refuses an existing host in another one
+with `409 host_transport_conflict`. On that refusal `up` registers again
+without `transport_mode`, which returns the stored host, and then sends
+`PUT /api/v0beta1/hosts/{id}` with the configured `transport_mode` (and
+`url: null` when moving into the tunnel, which takes no URL), printing
+`Switched host <name> from <old> to <new> mode`. This happens before tunnel
+enrolment, which Amika refuses for a host not in the tunnel. `setup` sends no
+`transport_mode`, so a host it registers is created as a listener and moved
+by the next `up`.
 
 Registration is complete once Amika knows how it reaches the host. `up` runs
 in this order: resolve config, register the hostname and secret, start the
