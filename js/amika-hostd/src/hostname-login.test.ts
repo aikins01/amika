@@ -19,7 +19,7 @@ import { signLoginPass, signSession } from "@amika/service-auth/credentials";
 import { createApp } from "./app.js";
 import type { MachineRuntime } from "./internal/machine-runtime.js";
 import { memoryServiceRegistry } from "./internal/service-registry.js";
-import { createUpgradeHandler } from "./internal/services.js";
+import { AMIKAD_PORT, createUpgradeHandler } from "./internal/services.js";
 import { virtualServer } from "./internal/tunnel-serving.js";
 
 const SECRET = "test-secret";
@@ -43,7 +43,7 @@ async function tunnelledHost() {
     list: vi.fn(async () => []),
   } as unknown as MachineRuntime;
   const registry = memoryServiceRegistry();
-  registry.set("demo", { web: 3000 });
+  registry.set("demo", { web: 3000, amikad: AMIKAD_PORT });
   // Another rig on the same host, for a request that must never reach it.
   registry.set("other", { admin: 4000 });
   const guest = vi.fn<typeof fetch>(
@@ -286,6 +286,29 @@ describe("a rig's service at its own hostname", () => {
       expect(guest).not.toHaveBeenCalled();
     },
   );
+
+  it("lets amikad's SSH upgrade through at its name, and nothing else of amikad's", async () => {
+    // A tunnel host's rig has no other address an SSH client can dial.
+    // amikad checks the connect token itself, so it reaches amikad as
+    // the caller sent it.
+    const { send, upgradeTo } = await tunnelledHost();
+    const amikad = {
+      host: "amikad--demo.r.acme.o.amika.test",
+      "x-amika-service": "amikad",
+    };
+
+    const handshake = await upgradeTo("/v1/ssh-sessions", {
+      ...amikad,
+      authorization: "Bearer connect-token",
+    });
+    expect(handshake).toMatch(/^GET \/v1\/ssh-sessions HTTP\/1\.1\r\n/);
+    expect(handshake).toContain("authorization: Bearer connect-token");
+
+    // A fresh host, so a refused upgrade reaches no guest at all.
+    const other = await tunnelledHost();
+    expect(await other.upgradeTo("/v1/exec", amikad)).toBe("");
+    expect((await send("/v1/status", amikad)).status).toBe(404);
+  });
 
   it("takes no host key at the service's name, as none could arrive", async () => {
     // The proxy and the gateway drop a caller's `x-amika-` headers, so a

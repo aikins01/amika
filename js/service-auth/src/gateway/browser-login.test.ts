@@ -441,6 +441,59 @@ describe("a request named by its hostname", () => {
     });
   });
 
+  it("lets amikad's SSH upgrade through at its name without the key", async () => {
+    // A tunnel host's rig has no other address a client can dial. amikad
+    // checks the connect token, as it does at the service route.
+    const ssh = (
+      path: string,
+      headers: Record<string, string> = {},
+      method = "GET",
+    ) => ({
+      ...request(
+        path,
+        { Connection: "Upgrade", Upgrade: "websocket", ...headers },
+        { method, origin: "https://amikad--demo.r.acme.o.amika.test" },
+      ),
+      named: { machine: "demo", service: "amikad" },
+    });
+
+    expect(
+      await gateway.authorize(ssh("/v1/ssh-sessions"), { upgrade: true }),
+    ).toEqual({
+      kind: "forward",
+      surface: "service",
+      route: { machine: "demo", service: "amikad", path: "/v1/ssh-sessions" },
+      keyless: true,
+      setCookies: [],
+    });
+    // Nothing else: not as a plain request, not on another path, method
+    // or query, and not on another service's name.
+    const refused: [GatewayRequest, boolean][] = [
+      [ssh("/v1/ssh-sessions"), false],
+      [ssh("/v1/exec"), true],
+      [ssh("/v1/ssh-sessions/"), true],
+      [ssh("/v1/ssh%2Dsessions"), true],
+      [ssh("/v1/ssh-sessions?x=1"), true],
+      [ssh("/v1/ssh-sessions", {}, "POST"), true],
+      [ssh("/v1/ssh-sessions", { Upgrade: "h2c" }), true],
+    ];
+    for (const [req, upgrade] of refused) {
+      expect(await gateway.authorize(req, { upgrade })).toMatchObject({
+        kind: "refuse",
+        status: 404,
+      });
+    }
+    expect(
+      await gateway.authorize(
+        {
+          ...ssh("/v1/ssh-sessions"),
+          named: { machine: "demo", service: "web" },
+        },
+        { upgrade: true },
+      ),
+    ).toMatchObject({ kind: "refuse", status: 401 });
+  });
+
   it("leaves the login endpoints to the server", async () => {
     expect(await gateway.authorize(named("/__amika/login"))).toEqual({
       kind: "not-mine",

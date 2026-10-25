@@ -103,19 +103,40 @@ export function parseServiceLinkPath(
  * it accepts the WebSocket, and sshd then checks the user's SSH key. Every
  * other path, method, service and plain HTTP request still needs the key.
  */
-export function isAmikadSshUpgrade({
-  method,
-  url,
-  headers,
-}: GatewayRequest): boolean {
-  const route = parseServicePath(url.pathname);
+export function isAmikadSshUpgrade(request: GatewayRequest): boolean {
+  const route = parseServicePath(request.url.pathname);
+  return (
+    route !== null &&
+    isSshWebSocket(
+      request,
+      `/v0beta1/rigs/${route.machine}/services/${AMIKAD_SERVICE}/v1/ssh-sessions`,
+    )
+  );
+}
+
+/**
+ * The same upgrade made to amikad at the rig's own address,
+ * `amikad--<rig>.r.<org>.o.<zone>`, where a tunnel host's rigs are reached:
+ * exactly `GET /v1/ssh-sessions`, no query, as a WebSocket upgrade. It is
+ * the only request amikad answers at its name, and it is authenticated as
+ * the service route's is, by amikad's connect token and then sshd.
+ */
+export function isNamedAmikadSshUpgrade(request: GatewayRequest): boolean {
+  return (
+    request.named?.service === AMIKAD_SERVICE &&
+    isSshWebSocket(request, "/v1/ssh-sessions")
+  );
+}
+
+function isSshWebSocket(
+  { method, url, headers }: GatewayRequest,
+  path: string,
+): boolean {
   if (
     method !== "GET" ||
     url.search !== "" ||
-    route === null ||
     // The literal path, not just its decoding, so no encoded variant counts.
-    url.pathname !==
-      `/v0beta1/rigs/${route.machine}/services/${AMIKAD_SERVICE}/v1/ssh-sessions`
+    url.pathname !== path
   ) {
     return false;
   }
