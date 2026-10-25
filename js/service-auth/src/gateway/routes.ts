@@ -9,6 +9,16 @@ export interface GatewayRequest {
   /** The request's URL; only its path and query are trusted. */
   url: URL;
   headers: Headers;
+  /**
+   * The rig and service the request's own hostname names, as a hop the
+   * server trusts vouched for them: amika-hostd's tunnel, which the gateway
+   * in front of it fills from what the reverse proxy signed. Never from a
+   * header a caller could write. Absent for every other request.
+   *
+   * Such a request is the service's whatever its path, but for the two
+   * login endpoints: its origin is the service's own (`gateway.ts`).
+   */
+  named?: Pick<ServiceRoute, "machine" | "service">;
 }
 
 /** A Fetch `Request` as the gateway reads it. */

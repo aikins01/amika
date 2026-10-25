@@ -1,4 +1,5 @@
 /** HTTP surface for the local VM host daemon. */
+import { IncomingMessage } from "node:http";
 import { Hono, type Context, type Next } from "hono";
 import { bodyLimit } from "hono/body-limit";
 import { HTTPException } from "hono/http-exception";
@@ -36,6 +37,8 @@ import {
 } from "@amika/service-auth/credentials";
 import {
   hostdGateway,
+  isForwardingHeader,
+  publicForwarding,
   resolveHostPort,
   stripHopByHopHeaders,
 } from "./internal/services.js";
@@ -43,6 +46,7 @@ import {
   memoryServiceRegistry,
   type ServiceRegistry,
 } from "./internal/service-registry.js";
+import { namedRoute, type NamedRoute } from "./internal/tunnel-rig-route.js";
 
 export interface AppConfig {
   /**
@@ -200,6 +204,24 @@ export function createApp(
   // (`@amika/service-auth/gateway`). Everything else needs the secret key.
   const gateway = hostdGateway(secretKey, amikaUrl);
   const checkSecretKey = requireSecretKey(secretKey);
+  // A request the tunnel named by its hostname is that service's, whatever
+  // its path: `/v0beta1/rigs` on `web--rig.r.org.o.<zone>` is the rig's own
+  // page, never this daemon's machine list. So it goes to the service
+  // before any route here can match it, but for the login endpoints, which
+  // are how a browser logs in to that origin.
+  app.use("*", (c, next) => {
+    const named = namedRoute(incomingOf(c.env));
+    if (!named) return next();
+    // Exactly the two login routes, method and all. Anything else on those
+    // paths would fall past them to the catch-all, which routes by the
+    // preview cookie, and a page can set that cookie on its own origin to
+    // reach another rig. Here it goes to the service, and is refused as
+    // not the service's (`authorizeNamed` leaves the login paths alone).
+    if (gateway.servesPreviews && isLoginRoute(c.req.method, c.req.url)) {
+      return next();
+    }
+    return proxyService(c.req.raw, gateway, runtime, registry, fetcher, named);
+  });
   app.use("*", (c, next) =>
     gateway.claims(fromRequest(c.req.raw)) ? next() : checkSecretKey(c, next),
   );
@@ -500,6 +522,26 @@ function snapshotName(requestPath: string): string {
   return validSnapshotName(decoded);
 }
 
+/** Whether this is one of the two routes a browser logs in through. */
+function isLoginRoute(method: string, url: string): boolean {
+  const { pathname } = new URL(url);
+  if (pathname === LOGIN_PATH) return method === "GET" || method === "HEAD";
+  return pathname === CALLBACK_PATH && method === "POST";
+}
+
+/**
+ * The Node request under a Hono context's `env`, as `@hono/node-server`
+ * passes it, or undefined for a request that came another way (a test's
+ * `app.request`, say).
+ */
+function incomingOf(env: unknown): IncomingMessage | undefined {
+  if (typeof env !== "object" || env === null || !("incoming" in env)) {
+    return undefined;
+  }
+  const { incoming } = env as { incoming: unknown };
+  return incoming instanceof IncomingMessage ? incoming : undefined;
+}
+
 /**
  * Forward a request the gateway claims to the service it names, as the
  * gateway decides: refused, or forwarded without the gateway's credentials,
@@ -511,8 +553,10 @@ async function proxyService(
   runtime: MachineRuntime,
   registry: ServiceRegistry,
   fetcher: typeof fetch,
+  /** The service the tunnel named the request for, if it did. */
+  named?: NamedRoute,
 ): Promise<Response> {
-  const decision = await gateway.authorize(fromRequest(request));
+  const decision = await gateway.authorize({ ...fromRequest(request), named });
   if (decision.kind === "not-mine") {
     return Response.json({ error: "Not found" }, { status: 404 });
   }
@@ -533,6 +577,16 @@ async function proxyService(
     if (gateway.isCredentialHeader(name)) forwarded.delete(name);
   }
   forwarded.delete("host");
+  // At its own address, the service is told that address
+  // (`publicForwarding`), and nothing the caller claimed about it.
+  if (named) {
+    for (const name of [...forwarded.keys()]) {
+      if (isForwardingHeader(name)) forwarded.delete(name);
+    }
+    for (const [name, value] of publicForwarding(url.host)) {
+      forwarded.set(name, value);
+    }
+  }
   const guestCookies = gateway.guestCookies(forwarded.get("cookie"));
   if (guestCookies) forwarded.set("cookie", guestCookies);
   else forwarded.delete("cookie");

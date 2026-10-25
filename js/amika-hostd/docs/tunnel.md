@@ -226,3 +226,59 @@ A tunnel host binds nothing, so the readiness the daemon reports over IPC
 carries no port. It carries the connection id the gateway named on the
 `101`, where the gateway sends one, which is what matches this daemon
 against the gateway's logs.
+
+### A rig named by its hostname
+
+A browser reaches a rig's service at `<service>--<rig>.r.<org>.o.<zone>`.
+That hostname never reaches this daemon on its own: the request goes to
+the gateway's address, and on Cloudflare the gateway's container renames
+it again. So the reverse proxy reads the rig and the service out of it and
+signs them, and the gateway, having checked the signature, writes them
+onto the tunnel stream as `x-amika-rig` and `x-amika-service`. It writes
+them after removing every `x-amika-` header the request arrived with, so
+on a tunnel stream they can only be the gateway's. It also sends the
+caller's own authority as `Host`.
+
+The tunnel's server (`tunnel-rig-route.ts`) reads the two headers, removes
+them, and records the rig and service beside the request in a `WeakMap`.
+The app and the upgrade handler ask `namedRoute` for it and hand it to the
+service-auth gateway as `GatewayRequest.named`. A header can be forged on a
+listening socket; a `WeakMap` entry only the tunnel's server writes
+cannot, so a listening daemon never names a request.
+
+A named request is that service's whatever its path. `/v0beta1/rigs` on
+`web--rig.r.org.o.<zone>` is the rig's own page, never this daemon's
+machine list, so the app sends it to the service before any of its own
+routes can match. The exceptions are `/__amika/login` and
+`/__amika/callback`, which are how a browser logs in to that origin.
+
+Who may have it is the gateway's to decide. At a name, that is a browser
+session for that origin and nothing else:
+
+- A page load without a session is sent to log in at the same origin and
+  comes back to the same path. Amika checks the origin names a rig of the
+  user's organization on this host, and posts the pass to that origin's
+  callback.
+- The host key and service tokens travel in `x-amika-` headers, which the
+  reverse proxy and the gateway both drop from what a caller sends, so
+  neither reaches a name. A scripted caller uses the service route.
+- `amikad` is never reachable at its name.
+
+The service is told its public address the way a reverse proxy tells an
+app behind it: `X-Forwarded-Host` (the signed name) and `X-Forwarded-Proto:
+https`, on plain requests and WebSocket handshakes alike, after any
+forwarding headers the request arrived with are dropped. `Host` stays the
+guest's local address on plain requests, so a dev server that accepts only
+`localhost` keeps working; frameworks build redirects and check `Origin`
+from the forwarded headers. A WebSocket handshake keeps the public `Host`,
+which its server checks `Origin` against.
+
+Each service is its own origin, so each logs in once, and no cookie has to
+say which service the root belongs to. Every rig shares the zone, so a
+sibling's page is the same site and the session goes with what it loads:
+only the origin's own requests and page loads are let through, and a frame
+or script another site loads is refused even with a session.
+
+A request with neither header is the control plane calling this daemon's
+API, and is left alone. One with only one of them, or a name that is not a
+DNS label, is refused with `400`.

@@ -25,6 +25,7 @@ import { TunnelSocket } from "./tunnel-socket.js";
 import { TunnelAttachment, DEFAULT_LIMITS } from "./tunnel-attachment.js";
 import { dialTunnel, TUNNEL_SUBPROTOCOL } from "./tunnel-dial.js";
 import { virtualServer } from "./tunnel-serving.js";
+import { namedRoute } from "./tunnel-rig-route.js";
 
 const LIMITS = DEFAULT_LIMITS;
 
@@ -91,6 +92,7 @@ class GatewayPeer {
   async upgrade(
     path: string,
     early: string,
+    headers: Record<string, string> = {},
   ): Promise<{
     write(text: string): void;
     until(text: string): Promise<string>;
@@ -106,9 +108,12 @@ class GatewayPeer {
       seen += chunk.toString("utf8");
       for (const wake of waiters.splice(0)) wake();
     });
+    const extra = Object.entries(headers)
+      .map(([name, value]) => `${name}: ${value}\r\n`)
+      .join("");
     socket.write(
       `GET ${path} HTTP/1.1\r\nHost: h-test.hosts.amika.dev\r\n` +
-        `Connection: Upgrade\r\nUpgrade: amika-ssh\r\n\r\n${early}`,
+        `Connection: Upgrade\r\nUpgrade: amika-ssh\r\n${extra}\r\n${early}`,
     );
     return {
       write: (text: string) => socket.write(text),
@@ -142,7 +147,7 @@ afterEach(async () => {
  * headers are exercised too.
  */
 async function attach(
-  serve: (request: Request) => Response | Promise<Response>,
+  serve: (request: Request, env: unknown) => Response | Promise<Response>,
   options: {
     keepAliveIntervalMs?: number;
     pingTimeoutMs?: number;
@@ -330,6 +335,107 @@ describe("an upgrade stops being HTTP at the 101", () => {
     channel.write("ping");
 
     expect(await channel.until("echo:ping;")).toContain("echo:ping;");
+  });
+});
+
+describe("a request the gateway names by rig and service", () => {
+  /** A host that says which path, which service, and which headers it saw. */
+  function echoing(request: Request, env: unknown): Response {
+    const url = new URL(request.url);
+    const amika = [...request.headers.keys()].filter((name) =>
+      name.startsWith("x-amika-"),
+    );
+    return Response.json({
+      path: `${url.pathname}${url.search}`,
+      host: request.headers.get("host"),
+      named:
+        namedRoute((env as { incoming: IncomingMessage }).incoming) ?? null,
+      amika,
+    });
+  }
+
+  it("reaches the app named for that service, with the path the browser asked for", async () => {
+    const { gateway } = await attach(echoing);
+
+    const answer = await gateway.send("/app/page?q=1", {
+      headers: {
+        host: "web--hacks.r.acme.o.amika.run",
+        "x-amika-rig": "hacks",
+        "x-amika-service": "web",
+      },
+    });
+
+    expect(answer.status).toBe(200);
+    expect(JSON.parse(answer.body)).toEqual({
+      path: "/app/page?q=1",
+      host: "web--hacks.r.acme.o.amika.run",
+      named: { machine: "hacks", service: "web" },
+      // Read, then removed: the service does not see them.
+      amika: [],
+    });
+  });
+
+  it("leaves a request that names no rig for this daemon's own API", async () => {
+    // The control plane's calls through the gateway carry neither header.
+    const { gateway } = await attach(echoing);
+
+    const answer = await gateway.send("/v0beta1/rigs?limit=2");
+
+    expect(JSON.parse(answer.body)).toMatchObject({
+      path: "/v0beta1/rigs?limit=2",
+      named: null,
+    });
+  });
+
+  it.each([
+    ["only a rig", { "x-amika-rig": "hacks" }],
+    ["only a service", { "x-amika-service": "web" }],
+    [
+      "a rig that is not a name",
+      { "x-amika-rig": "../x", "x-amika-service": "web" },
+    ],
+  ])("refuses %s, and the app never sees it", async (_case, headers) => {
+    let reached = false;
+    const { gateway } = await attach(() => {
+      reached = true;
+      return new Response("served");
+    });
+
+    const answer = await gateway.send("/app", { headers });
+
+    expect(answer.status).toBe(400);
+    expect(reached).toBe(false);
+  });
+
+  it("names an upgrade before the upgrade handler sees it", async () => {
+    // A rig's WebSockets take this path.
+    let seen: { url?: string; named?: unknown; rig?: unknown } = {};
+    const { gateway } = await attach(() => new Response("not here"), {
+      upgrade: (request, socket) => {
+        seen = {
+          url: request.url,
+          named: namedRoute(request),
+          rig: request.headers["x-amika-rig"],
+        };
+        socket.on("error", () => {});
+        socket.end(
+          "HTTP/1.1 101 Switching Protocols\r\n" +
+            "Upgrade: websocket\r\nConnection: Upgrade\r\n\r\n",
+        );
+      },
+    });
+
+    const channel = await gateway.upgrade("/live", "", {
+      "x-amika-rig": "hacks",
+      "x-amika-service": "web",
+    });
+    await channel.until("101");
+
+    expect(seen).toEqual({
+      url: "/live",
+      named: { machine: "hacks", service: "web" },
+      rig: undefined,
+    });
   });
 });
 

@@ -26,6 +26,7 @@ import {
   type ServiceRoute,
 } from "@amika/service-auth/gateway";
 import { isHostdPath } from "./hostd-paths.js";
+import { namedRoute } from "./tunnel-rig-route.js";
 import type { ServiceRegistry } from "./service-registry.js";
 import type { MachineRuntime } from "./machine-runtime.js";
 
@@ -99,7 +100,12 @@ export function createUpgradeHandler(
     upstream.once("connect", () => {
       connected = true;
       upstream.write(
-        requestHead(request, `${route.path}${incoming.url.search}`),
+        requestHead(
+          request,
+          `${route.path}${incoming.url.search}`,
+          // Only a named request is at a public address of its own.
+          incoming.named ? incoming.url.host : undefined,
+        ),
       );
       if (head.length) upstream.write(head);
       socket.pipe(upstream);
@@ -121,14 +127,20 @@ export function createUpgradeHandler(
    * are dropped: each was meant for hostd or a proxy in front of it, never
    * for the guest.
    */
-  function requestHead(request: IncomingMessage, path: string): string {
+  function requestHead(
+    request: IncomingMessage,
+    path: string,
+    /** For a named request, the public address it was made to. */
+    publicAuthority?: string,
+  ): string {
     const lines = [`${request.method} ${path} HTTP/${request.httpVersion}`];
     for (let i = 0; i < request.rawHeaders.length; i += 2) {
       const name = request.rawHeaders[i];
       const lower = name.toLowerCase();
       if (
         lower === "proxy-authorization" ||
-        gateway.isCredentialHeader(lower)
+        gateway.isCredentialHeader(lower) ||
+        (publicAuthority !== undefined && isForwardingHeader(lower))
       ) {
         continue;
       }
@@ -139,6 +151,11 @@ export function createUpgradeHandler(
         continue;
       }
       lines.push(`${name}: ${value}`);
+    }
+    if (publicAuthority !== undefined) {
+      for (const [name, value] of publicForwarding(publicAuthority)) {
+        lines.push(`${name}: ${value}`);
+      }
     }
     return `${lines.join("\r\n")}\r\n\r\n`;
   }
@@ -192,7 +209,14 @@ function fromIncomingMessage(request: IncomingMessage): GatewayRequest {
   } catch {
     url = new URL(request.url ?? "/", "http://hostd");
   }
-  return { method: request.method ?? "GET", url, headers };
+  // The service the tunnel named this upgrade for, if it did: a rig's
+  // WebSocket opened on its own hostname (`tunnel-rig-route.ts`).
+  return {
+    method: request.method ?? "GET",
+    url,
+    headers,
+    named: namedRoute(request),
+  };
 }
 
 const REFUSAL_REASONS = {
@@ -223,6 +247,32 @@ export async function resolveHostPort(
   const guestPort = registry.port(machine, service);
   if (guestPort === undefined) return null;
   return runtime.hostPort(machine, guestPort);
+}
+
+/**
+ * What a service reached at its own address is told about that address:
+ * the public name the browser asked for, and that it arrived over https.
+ *
+ * `Host` stays the guest's local address, as a reverse proxy leaves it by
+ * default. A dev server that accepts only `localhost` (Vite's host check,
+ * which guards against DNS rebinding) keeps working, and a framework that
+ * builds absolute URLs or checks `Origin` reads these instead.
+ *
+ * Always from the signed authority, never from the request: a caller who
+ * could choose these could have the guest mail a reset link to their own
+ * site. The caller's own forwarding headers are dropped first
+ * ({@link isForwardingHeader}), so these are the only ones the guest sees.
+ */
+export function publicForwarding(authority: string): Array<[string, string]> {
+  return [
+    ["X-Forwarded-Host", authority],
+    ["X-Forwarded-Proto", "https"],
+  ];
+}
+
+/** Whether a request header (lowercased) states how a proxy forwarded it. */
+export function isForwardingHeader(name: string): boolean {
+  return name === "forwarded" || name.startsWith("x-forwarded-");
 }
 
 /**

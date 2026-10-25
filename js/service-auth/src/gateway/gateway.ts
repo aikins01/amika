@@ -17,6 +17,13 @@
  *   preview cookie, for a browser holding a session it logged in for
  *   through Amika (`./browser-login.ts`). The login itself runs on two
  *   endpoints the server mounts: `startLogin` and `finishLogin`.
+ * - A request the server names (`GatewayRequest.named`): one that reached
+ *   a service at its own hostname, `<service>--<rig>.r.<org>.o.<zone>`.
+ *   Every path on that origin is the service's, but for the two login
+ *   endpoints. It takes a browser session for that origin, as a preview
+ *   does, and nothing else: no hop in front of it passes a caller's
+ *   `x-amika-` credential headers. No cookie routes it, and none is set:
+ *   the origin is the route.
  *
  * Every credential is the gateway's: the server forwards none of them
  * (`isCredentialHeader`, `guestCookies`), it drops a guest's `Set-Cookie`
@@ -56,6 +63,7 @@ import {
   usedLoginStates,
 } from "./browser-login";
 import {
+  AMIKAD_SERVICE,
   isAmikadSshUpgrade,
   parseServiceLinkPath,
   parseServicePath,
@@ -163,10 +171,11 @@ export function createGateway({
     claims(request: GatewayRequest): boolean {
       const { pathname } = request.url;
       return Boolean(
+        request.named ||
         parseServicePath(pathname) ||
         parseServiceLinkPath(pathname) ||
         cookieClaim(request) ||
-        (previews && (pathname === LOGIN_PATH || pathname === CALLBACK_PATH)) ||
+        (previews && isLoginEndpoint(pathname)) ||
         previewClaim(request),
       );
     },
@@ -186,6 +195,15 @@ export function createGateway({
         token: headers.get(SERVICE_TOKEN_HEADER_NAME),
         authorization: headers.get("authorization"),
       };
+
+      if (request.named) {
+        // The login endpoints are the server's on every origin it serves,
+        // this one included: it is where a browser logs in to it.
+        if (previews && isLoginEndpoint(url.pathname)) {
+          return { kind: "not-mine" };
+        }
+        return authorizeNamed(request, request.named, upgrade);
+      }
 
       // A root-relative URL a page opened through a link asks for.
       const claim = cookieClaim(request);
@@ -425,6 +443,75 @@ export function createGateway({
   };
 
   /**
+   * Who may have a request its server named by hostname. The path is the
+   * guest's, whole: the origin already says which service it is for.
+   *
+   * A browser session for this origin, and nothing else. The host key and a
+   * service token travel in `x-amika-` headers, and every hop in front of a
+   * named request (the reverse proxy, then the gateway) removes those from
+   * what a caller sends, so neither could arrive here: a scripted caller
+   * uses the service route instead. A browser without a session logs in at
+   * this origin and comes back to the same path. The login endpoints never
+   * reach here (`isLoginEndpoint`).
+   */
+  async function authorizeNamed(
+    request: GatewayRequest,
+    named: Pick<ServiceRoute, "machine" | "service">,
+    upgrade: boolean,
+  ): Promise<GatewayDecision> {
+    const { url, headers } = request;
+    const route = { ...named, path: url.pathname };
+    // amikad runs commands in the rig and has no preview. A browser session,
+    // which every member of the organization can get, must not reach it at
+    // its name, and nothing else reaches a name.
+    if (named.service === AMIKAD_SERVICE) {
+      return { kind: "refuse", surface: "service", status: 404 };
+    }
+    // Every rig of every organization shares the zone, so another
+    // organization's rig is the same site as this one, and the `Lax`
+    // session goes with what its pages load. A page load from there is a
+    // link followed; anything else it loads here (a frame, which could be
+    // laid invisibly over its own page, or a script) is refused, session
+    // or not.
+    const site = headers.get("sec-fetch-site");
+    if (
+      !upgrade &&
+      (site === "same-site" || site === "cross-site") &&
+      headers.get("sec-fetch-dest") !== "document"
+    ) {
+      return { kind: "refuse", surface: "preview", status: 403 };
+    }
+    if (!previews) {
+      return {
+        kind: "refuse",
+        surface: "preview",
+        status: 401,
+        hint: "This host serves no browser login. Reach the service at its service route with a service token.",
+      };
+    }
+    if (!(await hasSession(headers.get("cookie"), url, secretKey))) {
+      if (
+        !upgrade &&
+        request.method === "GET" &&
+        headers.get("sec-fetch-mode") === "navigate"
+      ) {
+        return { kind: "login", location: loginLocation(url) };
+      }
+      return {
+        kind: "refuse",
+        surface: "preview",
+        status: 401,
+        hint: "Open the page in a browser to log in through Amika. A scripted caller uses the service route with a service token.",
+      };
+    }
+    // Only this origin's own requests, and page loads, are let through.
+    if (!isOwnOrPageLoad(request, { upgrade })) {
+      return { kind: "refuse", surface: "preview", status: 403 };
+    }
+    return forward("preview", route, { setCookies: [] });
+  }
+
+  /**
    * `response` as its surface's must be: a link's and a preview's hardened,
    * as is every answer there, the server's own `404`s and `502`s included.
    */
@@ -444,6 +531,10 @@ export function createGateway({
         throw new Error(`Unexpected surface: ${String(exhaustive)}`);
       }
     }
+  }
+
+  function isLoginEndpoint(pathname: string): boolean {
+    return pathname === LOGIN_PATH || pathname === CALLBACK_PATH;
   }
 
   function forward(
