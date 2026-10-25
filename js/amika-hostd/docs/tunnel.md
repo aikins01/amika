@@ -264,6 +264,15 @@ session for that origin and nothing else:
   neither reaches a name. A scripted caller uses the service route.
 - `amikad` is never reachable at its name.
 
+The service is told its public address the way a reverse proxy tells an
+app behind it: `X-Forwarded-Host` (the signed name) and `X-Forwarded-Proto:
+https`, on plain requests and WebSocket handshakes alike, after any
+forwarding headers the request arrived with are dropped. `Host` stays the
+guest's local address on plain requests, so a dev server that accepts only
+`localhost` keeps working; frameworks build redirects and check `Origin`
+from the forwarded headers. A WebSocket handshake keeps the public `Host`,
+which its server checks `Origin` against.
+
 Each service is its own origin, so each logs in once, and no cookie has to
 say which service the root belongs to. Every rig shares the zone, so a
 sibling's page is the same site and the session goes with what it loads:

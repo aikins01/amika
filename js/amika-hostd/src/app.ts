@@ -37,6 +37,8 @@ import {
 } from "@amika/service-auth/credentials";
 import {
   hostdGateway,
+  isForwardingHeader,
+  publicForwarding,
   resolveHostPort,
   stripHopByHopHeaders,
 } from "./internal/services.js";
@@ -567,6 +569,16 @@ async function proxyService(
     if (gateway.isCredentialHeader(name)) forwarded.delete(name);
   }
   forwarded.delete("host");
+  // At its own address, the service is told that address
+  // (`publicForwarding`), and nothing the caller claimed about it.
+  if (named) {
+    for (const name of [...forwarded.keys()]) {
+      if (isForwardingHeader(name)) forwarded.delete(name);
+    }
+    for (const [name, value] of publicForwarding(url.host)) {
+      forwarded.set(name, value);
+    }
+  }
   const guestCookies = gateway.guestCookies(forwarded.get("cookie"));
   if (guestCookies) forwarded.set("cookie", guestCookies);
   else forwarded.delete("cookie");

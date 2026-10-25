@@ -13,11 +13,13 @@ import {
   type Server as HttpServer,
 } from "node:http";
 import { getRequestListener } from "@hono/node-server";
-import { createServer, type AddressInfo, type Server } from "node:net";
-import { signLoginPass } from "@amika/service-auth/credentials";
+import { connect, createServer, type AddressInfo, type Server } from "node:net";
+import type { Duplex } from "node:stream";
+import { signLoginPass, signSession } from "@amika/service-auth/credentials";
 import { createApp } from "./app.js";
 import type { MachineRuntime } from "./internal/machine-runtime.js";
 import { memoryServiceRegistry } from "./internal/service-registry.js";
+import { createUpgradeHandler } from "./internal/services.js";
 import { virtualServer } from "./internal/tunnel-serving.js";
 
 const SECRET = "test-secret";
@@ -49,7 +51,25 @@ async function tunnelledHost() {
     registry,
     fetch: guest,
   });
-  const tunnel = virtualServer({ fetch: app.fetch });
+  // A guest WebSocket server that records the handshake it is sent.
+  let handshake = "";
+  const guestPort = await listen(
+    createServer((socket) => {
+      socket.once("data", (chunk) => {
+        handshake = chunk.toString();
+        socket.end("HTTP/1.1 101 Switching Protocols\r\n\r\n");
+      });
+    }),
+  );
+  const upgrade = createUpgradeHandler(
+    SECRET,
+    runtime,
+    registry,
+    new Set<Duplex>(),
+    () => connect(guestPort, "127.0.0.1"),
+    { amikaUrl: AMIKA },
+  );
+  const tunnel = virtualServer({ fetch: app.fetch, upgrade });
   const port = await listen(createServer((socket) => tunnel.accept(socket)));
   // The same app on an ordinary listening socket, as listen mode serves it.
   const listenerPort = await listen(
@@ -65,7 +85,23 @@ async function tunnelledHost() {
   /** The same request to the listener, carrying the same headers. */
   const sendToListener = (path: string, headers: Record<string, string> = {}) =>
     sendTo(listenerPort, path, headers);
-  return { guest, send, sendToListener };
+  /** A WebSocket handshake down the "tunnel"; resolves with what the guest got. */
+  const upgradeTo = async (path: string, headers: Record<string, string>) => {
+    const socket = connect(port, "127.0.0.1");
+    await new Promise((ready) => socket.once("connect", ready));
+    const lines = Object.entries({
+      host: NAME,
+      ...NAMED,
+      connection: "Upgrade",
+      upgrade: "websocket",
+      ...headers,
+    }).map(([name, value]) => `${name}: ${value}`);
+    socket.write(`GET ${path} HTTP/1.1\r\n${lines.join("\r\n")}\r\n\r\n`);
+    await new Promise((done) => socket.once("data", done));
+    socket.destroy();
+    return handshake;
+  };
+  return { guest, send, sendToListener, upgradeTo };
 }
 
 /** Start `server` on a free loopback port, closed after the test. */
@@ -179,6 +215,45 @@ describe("a rig's service at its own hostname", () => {
     });
     expect(api.status).toBe(401);
     expect(guest).not.toHaveBeenCalled();
+  });
+
+  it("tells the service its public address, and nothing the caller claimed", async () => {
+    // `Host` stays local, so a dev server that only accepts localhost still
+    // answers; frameworks build URLs and check `Origin` from these. A caller
+    // who could set them could have the app mail a link to their own site.
+    const { guest, send } = await tunnelledHost();
+    const session = `__Host-amika-session=${await signSession(SECRET, { origin: ORIGIN, user: "u" })}`;
+
+    await send("/app", {
+      ...NAVIGATE,
+      cookie: session,
+      "x-forwarded-host": "evil.example",
+      "x-forwarded-proto": "http",
+      forwarded: "host=evil.example",
+    });
+
+    const [, init] = guest.mock.calls.at(-1)!;
+    const headers = new Headers(init?.headers);
+    expect(headers.get("x-forwarded-host")).toBe(NAME);
+    expect(headers.get("x-forwarded-proto")).toBe("https");
+    expect(headers.get("forwarded")).toBeNull();
+    expect(headers.get("host")).toBeNull();
+  });
+
+  it("tells a WebSocket the same, and keeps its Host for its Origin check", async () => {
+    const { upgradeTo } = await tunnelledHost();
+    const session = `__Host-amika-session=${await signSession(SECRET, { origin: ORIGIN, user: "u" })}`;
+
+    const handshake = await upgradeTo("/live", {
+      origin: ORIGIN,
+      cookie: session,
+      "x-forwarded-host": "evil.example",
+    });
+
+    expect(handshake).toContain(`X-Forwarded-Host: ${NAME}`);
+    expect(handshake).toContain("X-Forwarded-Proto: https");
+    expect(handshake).not.toContain("evil.example");
+    expect(handshake).toContain(`host: ${NAME}`);
   });
 
   it("takes no host key at the service's name, as none could arrive", async () => {
