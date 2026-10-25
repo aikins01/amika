@@ -70,18 +70,26 @@ function memoryStore(value?: string, description = "the test store") {
 
 /**
  * Fake secret stores that never touch a keychain or disk: `credentials` holds
- * the API key in either store, and `keychainSecret` the secret key when the
- * config chooses the keychain (with the file store it is in config.toml).
+ * the API key in either store, `keychainSecret` the secret key when the
+ * config chooses the keychain (with the file store it is in config.toml), and
+ * `attachmentCredential` the host's tunnel credential, which lives outside
+ * config.toml in both stores.
  */
 function memorySecrets() {
   const credentials = memoryStore();
   const keychainSecret = memoryStore(undefined, "the test keychain");
+  const attachmentCredential = memoryStore();
   const openSecrets = vi.fn((kind: "keychain" | "file") =>
     kind === "file"
-      ? { kind, apiKey: credentials }
-      : { kind, apiKey: credentials, secretKey: keychainSecret },
+      ? { kind, apiKey: credentials, attachmentCredential }
+      : {
+          kind,
+          apiKey: credentials,
+          secretKey: keychainSecret,
+          attachmentCredential,
+        },
   );
-  return { credentials, keychainSecret, openSecrets };
+  return { credentials, keychainSecret, attachmentCredential, openSecrets };
 }
 
 function harness(env: NodeJS.ProcessEnv = ENV) {
@@ -122,6 +130,14 @@ function harness(env: NodeJS.ProcessEnv = ENV) {
       ) => server,
     ),
     startInBackground: vi.fn(async () => ({ pid: 77, port: 4000 })),
+    startTunnel: vi.fn(() => ({
+      whenAttached: async () => ({
+        hostId: "host_1",
+        connectionId: "c_1",
+        rttMs: 12,
+      }),
+      close: async () => {},
+    })),
     startSmolvm: vi.fn(
       async (
         _url: string | undefined,
@@ -145,7 +161,7 @@ function harness(env: NodeJS.ProcessEnv = ENV) {
       async (_apiUrl: string, _options: Omit<PrepullOptions, "runtime">) => {},
     ),
     claimPidFile: vi.fn(() => release),
-    notifyReady: vi.fn(async (_port: number) => signalReady()),
+    notifyReady: vi.fn(async (_ready: { port?: number }) => signalReady()),
     isRunning: vi.fn(() => false),
     ...memorySecrets(),
     registerHost: vi.fn(async () => ({ host: HOST, created: true })),
@@ -264,7 +280,7 @@ describe("runCli", () => {
         "/state/amika-hostd/amika-hostd.pid",
         deps.isRunning,
       );
-      expect(deps.notifyReady).toHaveBeenCalledWith(3020);
+      expect(deps.notifyReady).toHaveBeenCalledWith({ port: 3020 });
       expect(out).toEqual([
         "amika-hostd listening on http://0.0.0.0:3020",
         ...(args[0] === "up"
@@ -291,6 +307,40 @@ describe("runCli", () => {
     expect(deps.startServer.mock.calls[0][0].port).toBe(7000);
     await runCli(["serve"], deps);
     expect(deps.startServer.mock.calls[1][0].port).toBe(5000);
+  });
+
+  it("serves over a tunnel when the transport says so", async () => {
+    // A tunnel host binds nothing, so the listener must not start: a
+    // bound port on a host Amika reaches by tunnel is a second address
+    // nobody routes to, and on a machine behind a home router it is the
+    // one an operator would try first.
+    const { deps, out } = harness();
+    deps.loadConfigFile.mockReturnValue({
+      path: "/etc/amika-hostd/config.toml",
+      contents: 'transport = "tunnel"',
+    } as never);
+
+    await runCli(["serve"], deps);
+
+    expect(deps.startTunnel).toHaveBeenCalledTimes(1);
+    expect(deps.startServer).not.toHaveBeenCalled();
+    expect(out.some((line) => line.includes("over a tunnel"))).toBe(true);
+    expect(out.some((line) => line.includes("listening on"))).toBe(false);
+  });
+
+  it("reports readiness without a port, and names the connection", async () => {
+    // `up` waits on this. A port here would be a lie -- there is none --
+    // and the connection id is what lets an operator match this daemon
+    // against the gateway's logs.
+    const { deps } = harness();
+    deps.loadConfigFile.mockReturnValue({
+      path: "/etc/amika-hostd/config.toml",
+      contents: 'transport = "tunnel"',
+    } as never);
+
+    await runCli(["serve"], deps);
+
+    expect(deps.notifyReady).toHaveBeenCalledWith({ connectionId: "c_1" });
   });
 
   it("releases the pidfile and reports a port that cannot be bound", async () => {
@@ -737,6 +787,214 @@ describe("completing registration", () => {
     );
     expect(deps.shutdownSignal).toHaveBeenCalled();
     expect(server.close).toHaveBeenCalled();
+  });
+});
+
+describe("enrolling a tunnel host", () => {
+  const ENROLMENT = {
+    credential: "amkht_b3JnXzE.s3cret",
+    generation: 2,
+    gateway_url: "wss://gateway.staging-amika.run/v1/host-tunnel",
+    transport_mode: "tunnel" as const,
+  };
+
+  /** A host configured for tunnel mode at `/etc/amika-hostd`. */
+  function tunnelHost() {
+    const h = harness();
+    h.deps.loadConfigFile.mockReturnValue({
+      path: "/etc/amika-hostd/config.toml",
+      contents: 'transport = "tunnel"',
+    } as never);
+    h.deps.registerHost.mockResolvedValue({ host: TUNNEL_HOST, created: true });
+    const written: Array<[string, unknown]> = [];
+    const enrol = vi.fn(async () => ENROLMENT);
+    const deps = {
+      ...h.deps,
+      enrol,
+      write: (file: string, record: unknown) => written.push([file, record]),
+    };
+    return { ...h, deps, enrol, written };
+  }
+
+  it("enrols on `up`, after registering, whatever setup did", async () => {
+    // A host set up fresh never rotates its key, and enrolment used to
+    // ride on the rotation, so such a host never got a credential.
+    const h = tunnelHost();
+
+    expect(await runCli(["up"], h.deps)).toBe(0);
+
+    expect(h.enrol).toHaveBeenCalledTimes(1);
+    expect(h.deps.registerHost.mock.invocationCallOrder[0]).toBeLessThan(
+      h.enrol.mock.invocationCallOrder[0]!,
+    );
+    expect(h.written).toEqual([
+      [
+        "/etc/amika-hostd/tunnel-enrolment.json",
+        {
+          hostId: TUNNEL_HOST.id,
+          generation: 2,
+          gatewayUrl: ENROLMENT.gateway_url,
+        },
+      ],
+    ]);
+    expect(h.deps.attachmentCredential.get()).toBe(ENROLMENT.credential);
+  });
+
+  it("puts the record beside the config it loaded, not the first candidate", async () => {
+    // An install loaded from `/etc/amika-hostd/config.toml` must find its
+    // record there; the first candidate is a user-config path.
+    const h = tunnelHost();
+
+    await runCli(["up"], h.deps);
+
+    expect(h.written[0]![0]).toBe("/etc/amika-hostd/tunnel-enrolment.json");
+  });
+
+  it("does not enrol a listening host", async () => {
+    // Enrolment mints a credential; on a host that binds a port nothing
+    // would use it.
+    const h = harness();
+    const enrol = vi.fn(async () => ENROLMENT);
+
+    expect(await runCli(["up"], { ...h.deps, enrol, write: () => {} })).toBe(0);
+
+    expect(enrol).not.toHaveBeenCalled();
+  });
+
+  it("fails `up` on a failed enrolment, and leaves the secret key alone", async () => {
+    // Enrolment is apart from the secret key's rotation, so its failure
+    // cannot roll back a key Amika already took.
+    const h = tunnelHost();
+    h.enrol.mockRejectedValueOnce(
+      new AmikaApiError("enrolment failed (HTTP 500)"),
+    );
+
+    expect(await runCli(["up"], h.deps)).toBe(1);
+
+    expect(h.deps.keychainSecret.set).not.toHaveBeenCalled();
+    expect(h.deps.startInBackground).not.toHaveBeenCalled();
+  });
+
+  it("serves the same features over the tunnel as over a port", async () => {
+    // Snapshots, and pre-pull's throwaway machines kept out of the list,
+    // are what the daemon serves, not how it is reached.
+    const h = tunnelHost();
+
+    await runCli(["serve", "--smolvm"], h.deps);
+
+    const calls = h.deps.startTunnel.mock.calls as unknown as Array<
+      [unknown, unknown, unknown, unknown, Record<string, unknown>]
+    >;
+    const options = calls[0]![4];
+    expect(options.snapshots).toBeDefined();
+    expect(options.hiddenMachines).toEqual(expect.any(Function));
+    expect(options.servicesFile).toEqual(expect.any(String));
+  });
+});
+
+describe("a tunnel daemon", () => {
+  /** A harness whose config chooses the tunnel. */
+  function tunnelled() {
+    const h = harness();
+    h.deps.loadConfigFile.mockReturnValue({
+      path: "/etc/amika-hostd/config.toml",
+      contents: 'transport = "tunnel"',
+    } as never);
+    return h;
+  }
+
+  it("is handed its credential by `up`, and says it is not on a port", async () => {
+    // The detached child has no one to answer a keychain prompt, so `up`
+    // reads the credential and sends it with the secret key. A tunnel
+    // daemon reports no port, and the message must not say "port undefined".
+    const h = tunnelled();
+    h.deps.registerHost.mockResolvedValue({ host: TUNNEL_HOST, created: true });
+    h.deps.startInBackground.mockResolvedValue({ pid: 77 } as never);
+    const deps = {
+      ...h.deps,
+      enrol: vi.fn(async () => ({
+        credential: "amkht_b3JnXzE.s3cret",
+        generation: 1,
+        gateway_url: "wss://gateway.example/v1/host-tunnel",
+        transport_mode: "tunnel" as const,
+      })),
+      write: () => {},
+    };
+
+    expect(await runCli(["up"], deps)).toBe(0);
+
+    const background = h.deps.startInBackground.mock.calls as unknown as Array<
+      [unknown, unknown, Record<string, unknown>]
+    >;
+    expect(background[0]![2]).toMatchObject({
+      secretKey: SECRET,
+      attachmentCredential: "amkht_b3JnXzE.s3cret",
+    });
+    expect(h.out).toContain(
+      "amika-hostd started in the background over a tunnel (pid 77)",
+    );
+  });
+
+  it("never opens the secret store when `up` started it", async () => {
+    const h = tunnelled();
+    const receiveSecrets = vi.fn(async () => ({
+      secretKey: SECRET,
+      attachmentCredential: "handed-credential",
+    }));
+
+    await runCli(["serve", "--secret-key-from-up"], {
+      ...h.deps,
+      receiveSecrets,
+    });
+
+    expect(h.deps.openSecrets).not.toHaveBeenCalled();
+    const calls = h.deps.startTunnel.mock.calls as unknown as Array<
+      [unknown, unknown, { attachmentCredential: { get(): unknown } }]
+    >;
+    expect(calls[0]![2].attachmentCredential.get()).toBe("handed-credential");
+  });
+
+  it("logs what the tunnel does for as long as it runs", async () => {
+    // A gateway that later refuses this host stops the tunnel for good
+    // while the daemon runs on; without this nothing says why.
+    const h = tunnelled();
+
+    await runCli(["serve"], h.deps);
+
+    const calls = h.deps.startTunnel.mock.calls as unknown as Array<
+      [unknown, unknown, unknown, unknown, { onEvent?: (e: unknown) => void }]
+    >;
+    calls[0]![4].onEvent?.({ type: "rejected", reason: "credential revoked" });
+    calls[0]![4].onEvent?.({
+      type: "waiting",
+      attempt: 2,
+      delayMs: 4_000,
+      reason: "connection refused",
+    });
+    expect(h.err).toContain(
+      "amika-hostd: the gateway refused this host and it will not retry: credential revoked",
+    );
+    expect(h.err).toContain(
+      "amika-hostd: reconnecting to the gateway in 4s (attempt 2): connection refused",
+    );
+  });
+
+  it("stops at once when shut down while the gateway is unreachable", async () => {
+    // Waiting out the attach timeout would keep a foreground daemon alive
+    // for half a minute after Ctrl-C.
+    const h = tunnelled();
+    const close = vi.fn(async () => {});
+    h.deps.startTunnel.mockReturnValue({
+      whenAttached: () => new Promise<never>(() => {}),
+      close,
+    });
+    h.deps.shutdownSignal.mockReturnValue(Promise.resolve());
+
+    const started = Date.now();
+    expect(await runCli(["serve"], h.deps)).toBe(0);
+
+    expect(Date.now() - started).toBeLessThan(5_000);
+    expect(close).toHaveBeenCalled();
   });
 });
 
@@ -1652,11 +1910,11 @@ describe("setup", () => {
       path: "/c.toml",
       contents: 'secret_store = "file"\nsecret_key = "REPLACE_ME"\n',
     });
-    const receiveSecretKey = vi.fn(async () => SECRET);
+    const receiveSecrets = vi.fn(async () => ({ secretKey: SECRET }));
     expect(
       await runCli(["serve", "--smolvm", "--secret-key-from-up"], {
         ...deps,
-        receiveSecretKey,
+        receiveSecrets,
       }),
     ).toBe(0);
     expect(deps.startServer).toHaveBeenCalledWith(
@@ -1713,14 +1971,14 @@ describe("setup", () => {
 
   it("a daemon `up` started takes the secret key from it, not the keychain", async () => {
     const { deps } = harness({ XDG_STATE_HOME: "/state" });
-    const receiveSecretKey = vi.fn(async () => SECRET);
+    const receiveSecrets = vi.fn(async () => ({ secretKey: SECRET }));
     expect(
       await runCli(["serve", "--smolvm", "--secret-key-from-up"], {
         ...deps,
-        receiveSecretKey,
+        receiveSecrets,
       }),
     ).toBe(0);
-    expect(receiveSecretKey).toHaveBeenCalled();
+    expect(receiveSecrets).toHaveBeenCalled();
     expect(deps.openSecrets).not.toHaveBeenCalled();
     expect(deps.startServer).toHaveBeenCalledWith(
       expect.objectContaining({ secretKey: SECRET }),

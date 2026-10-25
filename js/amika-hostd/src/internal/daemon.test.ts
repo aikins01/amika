@@ -111,16 +111,16 @@ async function liveProcess(title?: string): Promise<ChildProcess> {
 
 const hasProc = existsSync(`/proc/${process.pid}/cmdline`);
 
-describe("receiveSecretKey", () => {
+describe("receiveSecrets", () => {
   /**
    * A child that asks for the secret key and prints it, or the error. Its
    * request arrives as a message once it is waiting.
    */
   function receiver(timeoutMs = 5000) {
     return runNode(
-      `const { receiveSecretKey } = await import(process.argv[1]);
-       receiveSecretKey(${timeoutMs}).then(
-         (key) => { console.log("key:" + key); process.exit(0); },
+      `const { receiveSecrets } = await import(process.argv[1]);
+       receiveSecrets(${timeoutMs}).then(
+         (got) => { console.log("got:" + JSON.stringify(got)); process.exit(0); },
          (error) => { console.log("error:" + error.message); process.exit(1); },
        );`,
       [],
@@ -134,7 +134,26 @@ describe("receiveSecretKey", () => {
     expect(request).toEqual({ type: "want-secret-key" });
     child.send({ type: "secret-key", secretKey: "s".repeat(64) });
     expect(await finished(child)).toEqual({
-      stdout: `key:${"s".repeat(64)}`,
+      stdout: `got:${JSON.stringify({ secretKey: "s".repeat(64) })}`,
+      code: 0,
+    });
+  });
+
+  it("takes the tunnel credential handed with it", async () => {
+    // A detached daemon has no one to answer a keychain prompt, so a
+    // tunnel host's credential comes from `up` too.
+    const child = receiver();
+    await once(child, "message");
+    child.send({
+      type: "secret-key",
+      secretKey: "s".repeat(64),
+      attachmentCredential: "amkht_x.y",
+    });
+    expect(await finished(child)).toEqual({
+      stdout: `got:${JSON.stringify({
+        secretKey: "s".repeat(64),
+        attachmentCredential: "amkht_x.y",
+      })}`,
       code: 0,
     });
   });
@@ -162,8 +181,8 @@ describe("receiveSecretKey", () => {
 
   it("fails without a launching `up` at all", async () => {
     const child = runNode(
-      `const { receiveSecretKey } = await import(process.argv[1]);
-       receiveSecretKey().catch((error) => console.log(error.message));`,
+      `const { receiveSecrets } = await import(process.argv[1]);
+       receiveSecrets().catch((error) => console.log(error.message));`,
     );
     expect((await finished(child)).stdout).toBe(
       "no launching `amika-hostd up` to get the secret key from",
@@ -188,6 +207,23 @@ describe("startInBackground", () => {
       secretKey: "s".repeat(64),
     });
     child.emit("message", { type: "ready", port: 3020 });
+    await started;
+  });
+
+  it("hands a tunnel host's credential over with the secret key", async () => {
+    const child = fakeChild();
+    const started = startInBackground(["node", "cli.js", "serve"], paths(), {
+      spawn: spawning(child),
+      secretKey: "s".repeat(64),
+      attachmentCredential: "amkht_x.y",
+    });
+    child.emit("message", { type: "want-secret-key" });
+    expect(child.send).toHaveBeenCalledWith({
+      type: "secret-key",
+      secretKey: "s".repeat(64),
+      attachmentCredential: "amkht_x.y",
+    });
+    child.emit("message", { type: "ready" });
     await started;
   });
 
@@ -428,7 +464,7 @@ describe("notifyReady", () => {
     const { notifyReady } = await import(process.argv[1]);
     await new Promise((r) => setTimeout(r, 200));
     try {
-      await notifyReady(3020);
+      await notifyReady({ port: 3020 });
       console.log("sent");
     } catch (error) {
       console.log(error.message);

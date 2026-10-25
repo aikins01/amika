@@ -60,10 +60,16 @@ export interface BackgroundDeps {
   /** The child's environment; defaults to this process's. */
   env?: NodeJS.ProcessEnv;
   /**
-   * The secret key to hand the child over IPC (see `receiveSecretKey`), so
+   * The secret key to hand the child over IPC (see `receiveSecrets`), so
    * it never reads the keychain or the secret key from its environment.
    */
   secretKey?: string;
+  /**
+   * In tunnel mode, the host's tunnel attachment credential, handed over
+   * with the secret key for the same reason: the detached child has no one
+   * to answer a keychain prompt.
+   */
+  attachmentCredential?: string;
 }
 
 /**
@@ -81,8 +87,9 @@ export async function startInBackground(
     startupTimeoutMs = 60_000,
     env = process.env,
     secretKey,
+    attachmentCredential,
   }: BackgroundDeps = {},
-): Promise<{ pid: number; port: number }> {
+): Promise<{ pid: number; port?: number }> {
   ensureNotRunning(paths.pidFile, isRunning);
   const log = openLogFile(paths.logFile);
   let child: ChildProcess;
@@ -101,10 +108,14 @@ export async function startInBackground(
   const answer = (message: unknown) => {
     if (secretKey === undefined) return;
     if (!secretKeyRequestSchema.safeParse(message).success) return;
-    child.send?.({ type: "secret-key", secretKey } satisfies SecretKeyMessage);
+    child.send?.({
+      type: "secret-key",
+      secretKey,
+      ...(attachmentCredential === undefined ? {} : { attachmentCredential }),
+    } satisfies SecretKeyMessage);
   };
   child.on("message", answer);
-  let port: number;
+  let port: number | undefined;
   try {
     port = await waitForReady(child, startupTimeoutMs, paths.logFile);
   } finally {
@@ -118,14 +129,22 @@ export async function startInBackground(
 /** How long a background child waits for `up` to hand it the secret key. */
 const SECRET_KEY_TIMEOUT_MS = 10_000;
 
+/** What the launching `up` hands a background daemon. */
+export interface HandedSecrets {
+  secretKey: string;
+  /** In tunnel mode, the tunnel attachment credential. */
+  attachmentCredential?: string;
+}
+
 /**
- * Ask the launching `up` for the secret key over IPC, and wait for it (see
- * `startInBackground`). `up` read it from the secret store, where an unlock
- * prompt can reach the operator; the detached child has no one to prompt.
+ * Ask the launching `up` for the secrets over IPC, and wait for them (see
+ * `startInBackground`). `up` read them from the secret store, where an
+ * unlock prompt can reach the operator; the detached child has no one to
+ * prompt, so it never opens the store itself.
  */
-export function receiveSecretKey(
+export function receiveSecrets(
   timeoutMs = SECRET_KEY_TIMEOUT_MS,
-): Promise<string> {
+): Promise<HandedSecrets> {
   return new Promise((resolve, reject) => {
     if (!process.connected) {
       reject(
@@ -143,7 +162,12 @@ export function receiveSecretKey(
       const parsed = secretKeyMessageSchema.safeParse(message);
       if (!parsed.success) return;
       cleanup();
-      resolve(parsed.data.secretKey);
+      const { secretKey, attachmentCredential } = parsed.data;
+      resolve(
+        attachmentCredential === undefined
+          ? { secretKey }
+          : { secretKey, attachmentCredential },
+      );
     };
     const onDisconnect = () =>
       fail(
@@ -175,7 +199,7 @@ export function receiveSecretKey(
  * launching `up` went away first (e.g. Ctrl-C), so the daemon can shut down
  * cleanly instead of crashing on a broken IPC channel.
  */
-export function notifyReady(port: number): Promise<void> {
+export function notifyReady(ready: Omit<ReadyMessage, "type">): Promise<void> {
   const send = process.send?.bind(process);
   if (!send) return Promise.resolve();
   return new Promise((resolve, reject) => {
@@ -186,7 +210,7 @@ export function notifyReady(port: number): Promise<void> {
         ),
       );
     if (!process.connected) return abandoned();
-    send({ type: "ready", port } satisfies ReadyMessage, (error) => {
+    send({ type: "ready", ...ready } satisfies ReadyMessage, (error) => {
       if (error) return abandoned();
       process.disconnect?.();
       resolve();
@@ -382,15 +406,26 @@ export class DaemonError extends Error {
   override name = "DaemonError";
 }
 
+/**
+ * What a started daemon reports back to the `up` that spawned it.
+ *
+ * `port` is absent on a tunnel host, and that absence is the message:
+ * such a daemon binds nothing, so there is no port to report and no
+ * local URL for the operator to expose. Sending a zero instead would be
+ * indistinguishable from the kernel having chosen one.
+ */
 const readyMessageSchema = z.object({
   type: z.literal("ready"),
-  port: z.number().int(),
+  port: z.number().int().optional(),
+  /** The gateway's id for the attachment, where it reported one. */
+  connectionId: z.string().optional(),
 });
 type ReadyMessage = z.infer<typeof readyMessageSchema>;
 
 const secretKeyMessageSchema = z.object({
   type: z.literal("secret-key"),
   secretKey: z.string().min(1),
+  attachmentCredential: z.string().min(1).optional(),
 });
 
 type SecretKeyMessage = z.infer<typeof secretKeyMessageSchema>;
@@ -403,7 +438,7 @@ function waitForReady(
   child: ChildProcess,
   timeoutMs: number,
   logFile: string,
-): Promise<number> {
+): Promise<number | undefined> {
   return new Promise((resolve, reject) => {
     const fail = (reason: string) => {
       cleanup();
