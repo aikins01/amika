@@ -23,7 +23,8 @@
  *   endpoints. It takes a browser session for that origin, as a preview
  *   does, and nothing else: no hop in front of it passes a caller's
  *   `x-amika-` credential headers. No cookie routes it, and none is set:
- *   the origin is the route.
+ *   the origin is the route. amikad takes no session; at its name it
+ *   answers only its keyless SSH upgrade.
  *
  * Every credential is the gateway's: the server forwards none of them
  * (`isCredentialHeader`, `guestCookies`), it drops a guest's `Set-Cookie`
@@ -65,6 +66,7 @@ import {
 import {
   AMIKAD_SERVICE,
   isAmikadSshUpgrade,
+  isNamedAmikadSshUpgrade,
   parseServiceLinkPath,
   parseServicePath,
   type GatewayRequest,
@@ -463,8 +465,13 @@ export function createGateway({
     const route = { ...named, path: url.pathname };
     // amikad runs commands in the rig and has no preview. A browser session,
     // which every member of the organization can get, must not reach it at
-    // its name, and nothing else reaches a name.
+    // its name. Only its SSH upgrade does, without the key as at its service
+    // route: a tunnel host has no other address a client can dial, and
+    // amikad checks the connect token before it accepts the WebSocket.
     if (named.service === AMIKAD_SERVICE) {
+      if (upgrade && isNamedAmikadSshUpgrade(request)) {
+        return forward("service", route, { keyless: true, setCookies: [] });
+      }
       return { kind: "refuse", surface: "service", status: 404 };
     }
     // Every rig of every organization shares the zone, so another

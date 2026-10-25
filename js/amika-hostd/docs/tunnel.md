@@ -262,7 +262,11 @@ session for that origin and nothing else:
 - The host key and service tokens travel in `x-amika-` headers, which the
   reverse proxy and the gateway both drop from what a caller sends, so
   neither reaches a name. A scripted caller uses the service route.
-- `amikad` is never reachable at its name.
+- `amikad` takes no browser session. At its name it answers one request:
+  its SSH WebSocket, `GET /v1/ssh-sessions` as an upgrade, without the
+  host key, as at its service route. A tunnel host has no other address
+  an SSH client can dial, and amikad checks the connect token before it
+  accepts the socket. Everything else at `amikad--<rig>` is `404`.
 
 The service is told its public address the way a reverse proxy tells an
 app behind it: `X-Forwarded-Host` (the signed name) and `X-Forwarded-Proto:
