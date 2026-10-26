@@ -34,7 +34,7 @@ describe("resolveConfig", () => {
       smolRequestTimeoutMs: 300_000,
       sizes: {},
       images: {},
-      transport: "listen",
+      transport: "tunnel",
       tunnelGatewayUrl: undefined,
       configPath: undefined,
     });
@@ -459,20 +459,20 @@ describe("loadConfigFile", () => {
 });
 
 describe("the transport", () => {
-  it("is listening, so an upgrade never takes a working host offline", () => {
-    expect(resolveConfig({}).transport).toBe("listen");
+  it("is the tunnel, so a new host needs no port exposed", () => {
+    expect(resolveConfig({}).transport).toBe("tunnel");
     expect(resolveConfig({ file: file("port = 3020\n") }).transport).toBe(
-      "listen",
+      "tunnel",
     );
   });
 
   it("is read from TOML and from the environment", () => {
     expect(
-      resolveConfig({ file: file('transport = "tunnel"\n') }).transport,
-    ).toBe("tunnel");
+      resolveConfig({ file: file('transport = "listen"\n') }).transport,
+    ).toBe("listen");
     expect(
-      resolveConfig({ env: { AMIKA_HOSTD_TRANSPORT: "tunnel" } }).transport,
-    ).toBe("tunnel");
+      resolveConfig({ env: { AMIKA_HOSTD_TRANSPORT: "listen" } }).transport,
+    ).toBe("listen");
   });
 
   it("refuses a spelling the daemon has no code for", () => {
@@ -523,11 +523,11 @@ describe("config.example.toml", () => {
     expect(example.contents).toMatch(/^# hostname = "my-host"$/m);
   });
 
-  it("documents the transport and leaves it listening", () => {
-    expect(example.contents).toMatch(/^# transport = "listen"$/m);
+  it("documents the transport and leaves it tunnelling", () => {
+    expect(example.contents).toMatch(/^# transport = "tunnel"$/m);
     expect(example.contents).toMatch(/^# tunnel_gateway_url = /m);
     expect(resolveConfig({ file: example })).toMatchObject({
-      transport: "listen",
+      transport: "tunnel",
       tunnelGatewayUrl: undefined,
     });
   });

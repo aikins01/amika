@@ -19,12 +19,13 @@ export const DEFAULT_PORT = 3020;
 export type TransportMode = "listen" | "tunnel";
 
 /**
- * Listening, because that is what every host already installed does. A
- * config written before this setting existed must keep working, and a
- * daemon that silently started dialling out instead would take a working
- * host offline on upgrade. Tunnel mode is opt-in.
+ * Tunnelling, because it needs nothing from the operator: no port to
+ * expose and no URL to register. A listening host sets `transport =
+ * "listen"`. One installed before the tunnel existed and never given the
+ * setting moves to the tunnel on its next `up`, which enrols it and drops
+ * its registered URL.
  */
-export const DEFAULT_TRANSPORT: TransportMode = "listen";
+export const DEFAULT_TRANSPORT: TransportMode = "tunnel";
 
 /** Settings accepted as command-line flags. */
 export interface HostdFlags {
