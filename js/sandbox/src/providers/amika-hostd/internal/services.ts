@@ -61,9 +61,9 @@ export function hostdServices(apiUrl: string, client: SmolClient) {
       const routes = hostdServiceRoutes(services);
       return {
         services: services.map((service, i) => {
-          const { name, port } = routes[i];
+          const { name } = routes[i];
           const path =
-            name === AMIKAD_SERVICE && port === AMIKAD_PORT
+            name === AMIKAD_SERVICE
               ? `${HOSTD_RIGS_PATH}/${id}/services/${encodeURIComponent(name)}/`
               : previewPath(HOSTD_RIGS_PATH, id, name);
           return { ...service, url: `${origin}${path}` };
@@ -94,7 +94,9 @@ export function hostdServices(apiUrl: string, client: SmolClient) {
  * name, so a route never changes when other services do. hostd routes one
  * port per name, so a service declaring several ports is refused, as is a
  * name no URL can carry (an empty one, and `.` and `..`, which are dot
- * segments even percent-encoded).
+ * segments even percent-encoded). `amikad` is reserved for amikad's own
+ * port: hostd never serves it a preview, so on any other port it would get
+ * no URL a browser can open.
  */
 export function hostdServiceRoutes(
   services: SandboxService[],
@@ -104,6 +106,11 @@ export function hostdServiceRoutes(
     if (name === "" || name === "." || name === "..") {
       throw new Error(
         `amika-hostd cannot route a service named ${JSON.stringify(name)}`,
+      );
+    }
+    if (name === AMIKAD_SERVICE && containerPort !== AMIKAD_PORT) {
+      throw new Error(
+        `amika-hostd reserves the service name "${AMIKAD_SERVICE}" for port ${AMIKAD_PORT}; rename the service on port ${containerPort}`,
       );
     }
     const port = ports.get(name);

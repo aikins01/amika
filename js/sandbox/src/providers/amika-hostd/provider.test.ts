@@ -754,18 +754,6 @@ describe("amika-hostd services", () => {
       expect(guest).toHaveBeenCalledTimes(1);
     });
 
-    it("hands amikad on another port a preview like any other service", async () => {
-      const { provider } = harness();
-      const other = { ...AMIKAD, containerPort: 2222, hostPort: 2222 };
-      await provider.sandboxes.create(ctx, { ...INPUT, services: [other] });
-      const { services } = await provider.sandboxes
-        .get("demo")
-        .services!.refreshAll([other]);
-      expect(services[0].url).toBe(
-        "http://127.0.0.1:3020/v0beta1/rigs/demo/previews/amikad/",
-      );
-    });
-
     it("tells a browser on a host that cannot log it in to upgrade", async () => {
       // A loopback URL, where no browser cookie can be set.
       const { app, provider } = harness({ amikaUrl: AMIKA });
@@ -848,6 +836,11 @@ describe("amika-hostd services", () => {
     ],
     ["a dot-segment name", [{ ...WEB, name: ".." }], 'named ".."'],
     ["an empty name", [{ ...WEB, name: "" }], 'named ""'],
+    [
+      "amikad's name on another port, which could have no URL",
+      [{ ...AMIKAD, containerPort: 2222 }],
+      'reserves the service name "amikad" for port 60999',
+    ],
   ])("refuses %s rather than misroute", (_label, services, message) => {
     expect(() => hostdServiceRoutes(services as SandboxService[])).toThrow(
       message,
