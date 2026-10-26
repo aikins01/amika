@@ -7,20 +7,17 @@
  *
  * - `/v0beta1/rigs/<machine>/previews/<name>/...`, a preview: an address
  *   with no credential in it, which a browser opens after logging in to the
- *   host through Amika (`@amika/service-auth`). Every service
- *   gets one when the host can log browsers in: its hostd lists
- *   `browser-login` in `GET /health`, and its URL is an https origin of its
- *   own (`isBrowserLoginOrigin`).
- * - `/v0beta1/rigs/<machine>/service-links/<name>/<expiry>.<signature>/...`,
- *   a signed service link (`../service-links.ts`), on every other host, so a
- *   browser, curl or webhook can open it with no header. The control plane
- *   mints a new one once `signedUrlTtlSeconds` has passed, and each link
- *   outlives that by a day.
+ *   host through Amika (`@amika/service-auth`). Every service but amikad
+ *   gets one. It needs the host to be reached at an https origin of its own
+ *   (`isBrowserLoginOrigin`); on any other host, hostd answers the preview
+ *   by telling the browser to register such an address and upgrade
+ *   amika-hostd.
  * - `/v0beta1/rigs/<machine>/services/<name>/...`, which needs the host's
- *   secret key in `X-Amika-Hostd-Key` (`HOSTD_SERVICE_KEY_HEADER`). amikad
- *   keeps this URL: the control plane derives its SSH, status and terminal
- *   dials from it and sends the key, and the CLI's keyless SSH WebSocket
- *   must be exactly `.../services/amikad/v1/ssh-sessions`.
+ *   secret key in `X-Amika-Hostd-Key` (`HOSTD_SERVICE_KEY_HEADER`), or a
+ *   service token for `curl` and scripts. amikad keeps this URL: the control
+ *   plane derives its SSH, status and terminal dials from it and sends the
+ *   key, and the CLI's keyless SSH WebSocket must be exactly
+ *   `.../services/amikad/v1/ssh-sessions`.
  */
 import {
   SandboxProviderUnsupportedError,
@@ -28,12 +25,7 @@ import {
 } from "../../provider";
 import type { SandboxService } from "../../../types";
 import { machinePath, type SmolClient } from "../../smol/provider";
-import { serviceLinkPath, signServiceLink } from "../service-links";
-import {
-  BROWSER_LOGIN_FEATURE,
-  isBrowserLoginOrigin,
-  previewPath,
-} from "@amika/service-auth/credentials";
+import { previewPath } from "@amika/service-auth/credentials";
 
 /**
  * The versioned hostd API this provider speaks. hostd lists the versions it
@@ -47,50 +39,19 @@ export const HOSTD_RIGS_PATH = `/${HOSTD_API_VERSION}/rigs`;
 export const HOSTD_SERVICE_KEY_HEADER = "X-Amika-Hostd-Key";
 
 /**
- * How long the control plane serves a service link before it mints a new
- * one. Half the link's life, so the oldest link it can hand out still has
- * the other half left.
+ * How long the control plane keeps a service's URL before deriving it again.
+ * A preview URL carries no credential and never expires, so this only bounds
+ * how long a URL that no longer matches the host's address (a host that
+ * moved) is served.
  */
 export const HOSTD_SERVICE_URL_TTL_S = 12 * 60 * 60;
-
-/**
- * How long a link stays valid once minted: twice the control plane's TTL, so
- * a link served at the end of that window still works for twelve hours. A
- * day in total, as e2b and Daytona URLs last.
- *
- * The link's path is its credential, and a copy of it keeps working wherever
- * it lands -- browser history, a Slack message (which fetches the link
- * itself to build a preview), an error report. Nothing can revoke one
- * individually, so its life is the only bound on a leak, which is why this
- * is a day rather than the two it once was.
- */
-export const HOSTD_SERVICE_LINK_LIFETIME_S = 2 * HOSTD_SERVICE_URL_TTL_S;
 
 /** amikad's service name and guest port, as Amika registers them. */
 const AMIKAD_SERVICE = "amikad";
 const AMIKAD_PORT = 60999;
 
-export function hostdServices(
-  apiUrl: string,
-  secretKey: string,
-  client: SmolClient,
-  /** hostd's `GET /health` features; rejects when the host cannot say. */
-  features: () => Promise<readonly string[]>,
-) {
+export function hostdServices(apiUrl: string, client: SmolClient) {
   const origin = apiUrl.replace(/\/$/, "");
-  /**
-   * Whether this host serves previews. Asked on every refresh, so a host
-   * moves to previews as soon as it is upgraded. A host that cannot say is
-   * treated as one that does not: a signed link always works.
-   */
-  const servesPreviews = async (): Promise<boolean> => {
-    if (!isBrowserLoginOrigin(apiUrl)) return false;
-    try {
-      return (await features()).includes(BROWSER_LOGIN_FEATURE);
-    } catch {
-      return false;
-    }
-  };
   return {
     refreshUrls: async (
       id: string,
@@ -98,36 +59,15 @@ export function hostdServices(
     ): Promise<RefreshUrlsResult> => {
       machinePath(id);
       const routes = hostdServiceRoutes(services);
-      const previews = await servesPreviews();
-      const expiresAt =
-        Math.floor(Date.now() / 1000) + HOSTD_SERVICE_LINK_LIFETIME_S;
       return {
-        services: await Promise.all(
-          services.map(async (service, i) => {
-            const name = routes[i].name;
-            if (name === AMIKAD_SERVICE && routes[i].port === AMIKAD_PORT) {
-              return {
-                ...service,
-                url: `${origin}${HOSTD_RIGS_PATH}/${id}/services/${encodeURIComponent(name)}/`,
-              };
-            }
-            if (previews) {
-              return {
-                ...service,
-                url: `${origin}${previewPath(HOSTD_RIGS_PATH, id, name)}`,
-              };
-            }
-            const token = await signServiceLink(secretKey, {
-              rig: id,
-              service: name,
-              expiresAt,
-            });
-            return {
-              ...service,
-              url: `${origin}${serviceLinkPath(HOSTD_RIGS_PATH, id, name, token)}`,
-            };
-          }),
-        ),
+        services: services.map((service, i) => {
+          const { name } = routes[i];
+          const path =
+            name === AMIKAD_SERVICE
+              ? `${HOSTD_RIGS_PATH}/${id}/services/${encodeURIComponent(name)}/`
+              : previewPath(HOSTD_RIGS_PATH, id, name);
+          return { ...service, url: `${origin}${path}` };
+        }),
       };
     },
     /**
@@ -154,7 +94,9 @@ export function hostdServices(
  * name, so a route never changes when other services do. hostd routes one
  * port per name, so a service declaring several ports is refused, as is a
  * name no URL can carry (an empty one, and `.` and `..`, which are dot
- * segments even percent-encoded).
+ * segments even percent-encoded). `amikad` is reserved for amikad's own
+ * port: hostd never serves it a preview, so on any other port it would get
+ * no URL a browser can open.
  */
 export function hostdServiceRoutes(
   services: SandboxService[],
@@ -164,6 +106,11 @@ export function hostdServiceRoutes(
     if (name === "" || name === "." || name === "..") {
       throw new Error(
         `amika-hostd cannot route a service named ${JSON.stringify(name)}`,
+      );
+    }
+    if (name === AMIKAD_SERVICE && containerPort !== AMIKAD_PORT) {
+      throw new Error(
+        `amika-hostd reserves the service name "${AMIKAD_SERVICE}" for port ${AMIKAD_PORT}; rename the service on port ${containerPort}`,
       );
     }
     const port = ports.get(name);

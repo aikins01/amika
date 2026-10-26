@@ -1,6 +1,6 @@
 /** Cover the gateway's decision for each way in, without a server. */
 import { describe, expect, it } from "vitest";
-import { signServiceLink, signServiceToken } from "../credentials";
+import { signServiceToken } from "../credentials";
 import { createGateway } from "./gateway";
 import type { GatewayRequest } from "./routes";
 
@@ -21,8 +21,6 @@ function request(
     headers: new Headers(headers),
   };
 }
-
-const inAMinute = () => Math.floor(Date.now() / 1000) + 60;
 
 describe("createGateway", () => {
   it("forwards a keyed service request to its guest path", async () => {
@@ -63,57 +61,22 @@ describe("createGateway", () => {
     });
   });
 
-  it("forwards a link, setting its cookie only on a page load", async () => {
-    const token = await signServiceLink(SECRET, {
-      rig: "demo",
-      service: "web",
-      expiresAt: inAMinute(),
-    });
-    const path = `/v0beta1/rigs/demo/service-links/web/${token}/app.js`;
-    const asset = await gateway.authorize(request(path));
-    expect(asset).toMatchObject({
-      kind: "forward",
-      surface: "link",
-      route: { path: "/app.js" },
-      setCookies: [],
-    });
-    const page = await gateway.authorize(
-      request(path, { "Sec-Fetch-Mode": "navigate" }),
+  // Service links are retired: their path and their cookie are no longer
+  // the gateway's, so the server asks for its key and nothing is forwarded.
+  it("claims neither a retired service link nor its cookie", async () => {
+    const link = request(
+      "/v0beta1/rigs/demo/service-links/web/1791417600.sig/",
+      { "Sec-Fetch-Mode": "navigate" },
     );
-    expect(page).toMatchObject({ kind: "forward", surface: "link" });
-    // Only its own cookie: without previews there is none to end.
-    expect(page.kind === "forward" && page.setCookies).toEqual([
-      expect.stringMatching(/^__Host-amika-service-link=demo\/web\//),
-    ]);
-  });
+    expect(gateway.claims(link)).toBe(false);
+    expect(await gateway.authorize(link)).toEqual({ kind: "not-mine" });
 
-  it("routes a root-relative URL by the link cookie, outside its own paths", async () => {
-    const token = await signServiceLink(SECRET, {
-      rig: "demo",
-      service: "web",
-      expiresAt: inAMinute(),
-    });
-    const headers = {
-      Cookie: `__Host-amika-service-link=demo/web/${token}`,
+    const asset = request("/@vite/client", {
+      Cookie: "__Host-amika-service-link=demo/web/1791417600.sig",
       "Sec-Fetch-Site": "same-origin",
-    };
-    expect(await gateway.authorize(request("/@vite/client", headers))).toEqual({
-      kind: "forward",
-      surface: "link",
-      route: { machine: "demo", service: "web", path: "/@vite/client" },
-      keyless: false,
-      setCookies: [],
     });
-    // A service worker from the root would claim every link on the host.
-    expect(
-      await gateway.authorize(
-        request("/sw.js", { ...headers, "Service-Worker": "script" }),
-      ),
-    ).toEqual({ kind: "refuse", surface: "link", status: 404 });
-    // The server's own paths are never the cookie's.
-    expect(await gateway.authorize(request("/v0beta1/rigs", headers))).toEqual({
-      kind: "not-mine",
-    });
+    expect(gateway.claims(asset)).toBe(false);
+    expect(await gateway.authorize(asset)).toEqual({ kind: "not-mine" });
   });
 
   it("leaves anything else to the server", async () => {
@@ -191,13 +154,14 @@ describe("createGateway", () => {
     );
   });
 
-  it("hardens every answer on a link, and only there", async () => {
-    const link = gateway.refusal({
+  it("hardens every answer on a preview, and only there", async () => {
+    const preview = gateway.refusal({
       kind: "refuse",
-      surface: "link",
+      surface: "preview",
       status: 401,
     });
-    expect(link.headers.get("cache-control")).toBe("private, no-store");
+    expect(preview.headers.get("cache-control")).toMatch(/^private/);
+    expect(preview.headers.get("x-robots-tag")).toBe("noindex");
     const service = gateway.refusal({
       kind: "refuse",
       surface: "service",

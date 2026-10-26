@@ -14,8 +14,7 @@
  *   back to the same path; anything else is refused.
  * - Opening a preview also sets `__Host-amika-preview`, naming its rig and
  *   service but no credential, so the page's root-relative URLs reach the
- *   same service, as the link cookie does for links (`./link-cookie.ts`).
- *   They need the session too.
+ *   same service (`./cookies.ts`). They need the session too.
  *
  * Every cookie is `__Host-` (Secure, `Path=/`, no `Domain`) and none is set
  * on a loopback address or an explicit port (`browserOrigin`), where every
@@ -46,7 +45,7 @@ import {
   cookieValues,
   expiredCookie,
   isLoopbackHost,
-} from "./link-cookie";
+} from "./cookies";
 import { dropCdnCachePolicies } from "./responses";
 import {
   AMIKAD_SERVICE,
@@ -113,7 +112,7 @@ export function startLogin(request: Request, amikaUrl: string): Response {
       Response.json(
         {
           error:
-            "Browser login needs the host's own https address, without a port; open the rig's service link instead",
+            "Previews need this host's own https address, without a port. Register one with `amika-hostd register-url <https-url>`, and upgrade amika-hostd if it is out of date.",
         },
         { status: 400 },
       ),
@@ -243,7 +242,8 @@ export function parsePreviewPath(pathname: string): ServiceRoute | null {
 
 /**
  * The `Set-Cookie` values for the preview a browser just opened: its cookie,
- * and the end of any link cookie, so the preview opened last owns the root.
+ * so the preview opened last owns the root, and the end of any retired link
+ * cookie (`LINK_COOKIE`).
  * None for anything but a page load (a script or image loaded through a
  * preview must not change which service owns the root) or where the gateway
  * sets no cookies. The cookie names no credential: requests it routes need
@@ -291,7 +291,9 @@ export function isOwnOrPageLoad(
 /**
  * The preview a request's cookie names, or null when it names none, or the
  * request is not the origin's own (`Sec-Fetch-Site: same-origin`, or `none`
- * for one the user started), as for the link cookie.
+ * for one the user started): a page on another origin, even a sibling
+ * subdomain the cookie's `SameSite` lets through, cannot drive a preview's
+ * routes.
  */
 export function previewFromCookie(
   cookieHeader: string | null | undefined,
@@ -313,7 +315,7 @@ export function previewFromCookie(
 
 /**
  * Headers for every response on a preview. The URL carries no credential,
- * so unlike a link's this lets the guest's own caching through, but always
+ * so this lets the guest's own caching through, but always
  * `private` (a shared cache must not keep a logged-in page), keeps search
  * engines out, and keeps a service worker inside its own preview.
  */

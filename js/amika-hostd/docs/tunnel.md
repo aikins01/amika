@@ -42,7 +42,7 @@ hostd already keeps two secrets, and the tunnel uses neither.
   Spec 025 forbids reusing it, and `setup` already keeps it out of the
   daemon's environment.
 - The **secret key** authorizes Amika's requests _into_ this daemon and
-  signs service links. Attaching a host is the opposite direction and a
+  signs service tokens and browser sessions. Attaching a host is the opposite direction and a
   different permission.
 
 So the tunnel adds a third secret, `attachment-credential`, in the same

@@ -11,7 +11,7 @@ import {
   verifyLoginPass,
   verifySession,
 } from "./browser-login";
-import { signServiceLink } from "./service-links";
+import { signServiceToken } from "./service-tokens";
 
 const SECRET = "0123456789abcdef0123456789abcdef";
 const NOW = 1_791_417_600;
@@ -94,15 +94,15 @@ describe("login passes", () => {
   });
 
   // Each credential has its own derived key, so none stands in for another.
-  it("refuses a session or a service link as a pass", async () => {
+  it("refuses a session or a service token as a pass", async () => {
     const session = await signSession(SECRET, PASS, NOW);
     expect(await verify(session)).toBe("invalid");
-    const link = await signServiceLink(SECRET, {
-      rig: "demo",
-      service: "web",
-      expiresAt: NOW + 60,
-    });
-    expect(await verify(link)).toBe("invalid");
+    const token = await signServiceToken(
+      SECRET,
+      { rig: "demo", service: "web" },
+      { nowS: NOW },
+    );
+    expect(await verify(token)).toBe("invalid");
   });
 
   it.each(["", ".", "abc", "abc.def", `${"a".repeat(3000)}.x`, "a b.c"])(

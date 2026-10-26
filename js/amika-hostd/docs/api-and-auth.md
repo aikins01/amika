@@ -7,7 +7,7 @@ How hostd versions its HTTP API, and the credential every route requires.
 hostd and the control plane upgrade independently, so hostd's API is
 versioned. `/v0beta1/rigs` is the current API: the machine routes (create,
 get, delete, start, stop, exec, files, services), the service routes and
-the service-link routes.
+the preview routes.
 `GET /health` lists the versions served and the features a control plane may
 rely on (`{ "status": "ok", "apis": ["v0beta1"], "features":
 ["service-tokens", "snapshots"] }`). `snapshots` appears only on a daemon
@@ -19,8 +19,8 @@ it once none are deployed. Change a version's contract only in a new version.
 
 Every route, including `/health` and unknown paths, requires the secret key:
 in `X-Amika-Hostd-Key` (or a service token in `X-Amika-Authorization`) on
-service routes, as a signed link on service-link
-routes, or as the link cookie on a path outside hostd's own (see
+service routes, or as a browser session on preview routes and on a path
+outside hostd's own that the preview cookie names (see
 [Service routes](service-routes.md)), otherwise as
 `Authorization: Bearer <secret key>` (the scheme the Amika CLI uses for API
 credentials). `src/internal/auth.ts` reads it the same way as amika-mono's

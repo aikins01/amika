@@ -73,9 +73,9 @@ amika-hostd register-url https://<your-tunnel-url> # the URL ngrok printed
 `amika-hostd up` prompts for this URL when the host doesn't have one yet, so
 you can paste it there instead. Prefer HTTPS at the root of its own hostname on
 the default port, as a tunnel URL gives. `register-url` takes a path, an
-explicit port or plain http and warns: rigs and service links still work, but a
-browser preview that loads root-relative assets (a Vite or Next.js dev server)
-does not.
+explicit port or plain http and warns: rigs and service tokens still work, but
+browsers cannot open the host's previews, since a browser logs in to a preview
+with a cookie that needs the host's own https origin.
 
 ### 5. Create a rig on the host
 

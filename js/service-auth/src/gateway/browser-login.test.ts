@@ -3,7 +3,7 @@
  * claims), its preview decisions, and its cache-control rule.
  */
 import { describe, expect, it } from "vitest";
-import { signServiceLink, signServiceToken, signSession } from "../credentials";
+import { signServiceToken, signSession } from "../credentials";
 import {
   browserOrigin,
   hardenPreviewResponse,
@@ -51,29 +51,10 @@ describe("previews", () => {
       kind: "forward",
       surface: "preview",
       route: { machine: "demo", service: "web", path: "/docs" },
-      // And ends any link cookie, so the preview opened last owns the root.
+      // And ends a retired service link's cookie, which nothing reads now.
       setCookies: [
         expect.stringMatching(/^__Host-amika-preview=demo\/web; /),
         expect.stringMatching(/^__Host-amika-service-link=; .*Max-Age=0/),
-      ],
-    });
-  });
-
-  it("ends the preview cookie when a link is opened after it", async () => {
-    const token = await signServiceLink(SECRET, {
-      rig: "demo",
-      service: "api",
-      expiresAt: Math.floor(Date.now() / 1000) + 60,
-    });
-    const decision = await gateway.authorize(
-      request(`/v0beta1/rigs/demo/service-links/api/${token}/`, PAGE_LOAD),
-    );
-    expect(decision).toMatchObject({
-      kind: "forward",
-      surface: "link",
-      setCookies: [
-        expect.stringMatching(/^__Host-amika-service-link=demo\/api\//),
-        expect.stringMatching(/^__Host-amika-preview=; .*Max-Age=0/),
       ],
     });
   });
@@ -220,23 +201,17 @@ describe("previews", () => {
     },
   );
 
-  // Opening either ends the other's cookie; this is only the tiebreak.
-  it("lets a link cookie win when a browser holds both", async () => {
-    const token = await signServiceLink(SECRET, {
-      rig: "demo",
-      service: "api",
-      expiresAt: Math.floor(Date.now() / 1000) + 60,
-    });
+  it("routes by the preview cookie whatever retired link cookie is held", async () => {
     const decision = await gateway.authorize(
       request("/x", {
-        Cookie: `__Host-amika-service-link=demo/api/${token}; ${await session()}; __Host-amika-preview=demo/web`,
+        Cookie: `__Host-amika-service-link=demo/api/1791417600.sig; ${await session()}; __Host-amika-preview=demo/web`,
         "Sec-Fetch-Site": "same-origin",
       }),
     );
     expect(decision).toMatchObject({
       kind: "forward",
-      surface: "link",
-      route: { service: "api" },
+      surface: "preview",
+      route: { service: "web" },
     });
   });
 

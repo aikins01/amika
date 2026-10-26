@@ -61,39 +61,6 @@ export function parseServicePath(pathname: string): ServiceRoute | null {
   return { machine: match[1], service, path: match[3] ?? "/" };
 }
 
-/** A parsed service-link route: a service route plus its signed token. */
-export interface ServiceLinkRoute extends ServiceRoute {
-  /** `<expiry>.<signature>`, as the control plane minted it. */
-  token: string;
-}
-
-/**
- * Split a service-link path into its route parts and token, or null if it is
- * not one. As in `parseServicePath`, the service name is decoded and the
- * guest path is kept encoded.
- */
-export function parseServiceLinkPath(
-  pathname: string,
-): ServiceLinkRoute | null {
-  const match =
-    /^\/v0beta1\/rigs\/([a-zA-Z0-9][a-zA-Z0-9_-]*)\/service-links\/([^/]+)\/([^/]+)(\/.*)?$/.exec(
-      pathname,
-    );
-  if (!match) return null;
-  let service: string;
-  try {
-    service = decodeURIComponent(match[2]);
-  } catch {
-    return null;
-  }
-  return {
-    machine: match[1],
-    service,
-    token: match[3],
-    path: match[4] ?? "/",
-  };
-}
-
 /**
  * Whether this upgrade is the one service request that needs no host key:
  * the SSH WebSocket a user's `amika sandbox ssh` opens to the rig's amikad,

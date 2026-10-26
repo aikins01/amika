@@ -1,6 +1,6 @@
 /**
  * Who may reach a rig's service, decided per request: the host key, service
- * tokens, signed links and the link cookie. See `./gateway.ts`.
+ * tokens and browser sessions on previews. See `./gateway.ts`.
  */
 export {
   createGateway,
@@ -15,7 +15,6 @@ export {
 export {
   SERVICE_KEY_HEADER,
   SERVICE_TOKEN_HEADER_NAME,
-  authorizeServiceLinkRequest,
   authorizeServiceRequest,
   authorizeServiceRouteRequest,
   bearerToken,
@@ -28,20 +27,15 @@ export {
   SESSION_COOKIE,
   carriesGatewayCookie,
   isLoopbackHost,
-  linkCookie,
-  linkFromCookie,
   withoutGatewayCookies,
-  type LinkCookieClaim,
-} from "./link-cookie";
-export { hardenServiceLinkResponse, tokenHint } from "./responses";
+} from "./cookies";
+export { tokenHint } from "./responses";
 export {
   AMIKAD_SERVICE,
   fromRequest,
   isAmikadSshUpgrade,
-  parseServiceLinkPath,
   parseServicePath,
   type GatewayRequest,
-  type ServiceLinkRoute,
   type ServiceRoute,
 } from "./routes";
 export {

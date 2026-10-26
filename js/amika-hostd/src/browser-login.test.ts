@@ -122,6 +122,10 @@ describe("browser login", () => {
     const response = await host().app.request(`${origin}/__amika/login`);
     expect(response.status).toBe(400);
     expect(response.headers.getSetCookie()).toEqual([]);
+    // With no link to fall back on, the browser is told how to fix the host.
+    expect(((await response.json()) as { error: string }).error).toMatch(
+      /register-url.*upgrade amika-hostd/,
+    );
   });
 
   it("sets a session on a valid pass and returns to the preview", async () => {

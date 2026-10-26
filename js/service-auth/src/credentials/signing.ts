@@ -1,6 +1,6 @@
 /**
  * HMAC-SHA256 signing under keys derived from a host's secret key, shared by
- * every credential the control plane and hostd exchange (`./service-links.ts`).
+ * every credential the control plane and hostd exchange (`./service-tokens.ts`, `./browser-login.ts`).
  * Each use derives its own key from a distinct label, so a credential minted
  * for one use never verifies as another.
  *
