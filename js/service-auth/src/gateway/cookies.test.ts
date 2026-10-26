@@ -1,6 +1,6 @@
-/** Cover which hosts count as loopback, where hostd sets no link cookie. */
+/** Cover which hosts count as loopback, where the gateway sets no cookie. */
 import { describe, expect, it } from "vitest";
-import { isLoopbackHost } from "./link-cookie";
+import { isLoopbackHost } from "./cookies";
 
 /** A host as `URL.hostname` spells it, which is what hostd checks. */
 const hostname = (host: string) => new URL(`https://${host}:3020/`).hostname;

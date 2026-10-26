@@ -1,8 +1,7 @@
 /** Cover the route parsing and credential checks behind the gateway. */
-import { signServiceLink } from "../credentials";
 import { describe, expect, it } from "vitest";
-import { authorizeServiceLinkRequest, authorizeServiceRequest } from "./keys";
-import { parseServiceLinkPath, parseServicePath } from "./routes";
+import { authorizeServiceRequest } from "./keys";
+import { parseServicePath } from "./routes";
 
 const SECRET = "0123456789abcdef0123456789abcdef";
 
@@ -34,73 +33,9 @@ describe("parseServicePath", () => {
     "/v0beta1/rigs/de.mo/services/web",
     "/v0beta1/rigs/demo/services/%E0%A4%A",
     "/v0beta1/rigs/demo/other/web",
+    "/v0beta1/rigs/demo/service-links/web/1.sig",
   ])("rejects %s", (path) => {
     expect(parseServicePath(path)).toBeNull();
-  });
-});
-
-describe("parseServiceLinkPath", () => {
-  it("splits the route, decodes the service and keeps the guest path", () => {
-    expect(
-      parseServiceLinkPath(
-        "/v0beta1/rigs/demo/service-links/Coding%20Agent%2Fv2/1.sig/a%2Fb",
-      ),
-    ).toEqual({
-      machine: "demo",
-      service: "Coding Agent/v2",
-      token: "1.sig",
-      path: "/a%2Fb",
-    });
-    expect(
-      parseServiceLinkPath("/v0beta1/rigs/demo/service-links/web/1.sig")?.path,
-    ).toBe("/");
-  });
-
-  it.each([
-    "/v0beta1/rigs/demo/services/web/1.sig",
-    "/v0beta1/rigs/demo/service-links/web",
-    "/v0beta1/rigs/demo/service-links/web/",
-    "/v0beta1/rigs/-demo/service-links/web/1.sig",
-    "/v0beta1/rigs/demo/service-links/%E0%A4%A/1.sig",
-  ])("rejects %s", (path) => {
-    expect(parseServiceLinkPath(path)).toBeNull();
-  });
-});
-
-describe("authorizeServiceLinkRequest", () => {
-  const NOW = 1_791_417_600;
-  const route = async (expiresAt = NOW + 60) => ({
-    machine: "demo",
-    service: "web",
-    path: "/",
-    token: await signServiceLink(SECRET, {
-      rig: "demo",
-      service: "web",
-      expiresAt,
-    }),
-  });
-
-  it("accepts an unexpired link with no key", async () => {
-    expect(
-      await authorizeServiceLinkRequest(SECRET, await route(), {}, NOW),
-    ).toBeNull();
-  });
-
-  it("refuses an expired link with 401", async () => {
-    expect(
-      await authorizeServiceLinkRequest(SECRET, await route(NOW), {}, NOW),
-    ).toBe(401);
-  });
-
-  it("refuses the host key as Authorization with 400", async () => {
-    expect(
-      await authorizeServiceLinkRequest(
-        SECRET,
-        await route(),
-        { authorization: `Bearer ${SECRET}` },
-        NOW,
-      ),
-    ).toBe(400);
   });
 });
 

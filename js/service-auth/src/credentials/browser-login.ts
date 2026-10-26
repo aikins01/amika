@@ -22,8 +22,10 @@
  *
  * Cookies need a hostname of the host's own at the root of an https origin
  * on the default port (`isBrowserLoginOrigin`): on a loopback address or an
- * explicit port every other local server would receive them. Hosts reached
- * any other way keep signed service links.
+ * explicit port every other local server would receive them. A host reached
+ * any other way serves no browser a service: hostd tells the browser to
+ * register such an address and upgrade amika-hostd. Scripts reach services
+ * with a service token on any host (`./service-tokens.ts`).
  *
  * Only Web Crypto is used, so this runs wherever the provider does.
  */

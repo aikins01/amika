@@ -1,18 +1,10 @@
 /**
  * The checks behind each way a caller proves itself on a service route: the
- * host's secret key, a service token, or a signed link.
+ * host's secret key or a service token.
  */
 import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
-import {
-  SERVICE_TOKEN_HEADER,
-  verifyServiceLink,
-  verifyServiceToken,
-} from "../credentials";
-import {
-  AMIKAD_SERVICE,
-  type ServiceLinkRoute,
-  type ServiceRoute,
-} from "./routes";
+import { SERVICE_TOKEN_HEADER, verifyServiceToken } from "../credentials";
+import { AMIKAD_SERVICE, type ServiceRoute } from "./routes";
 
 /** Carries the host's secret key on service routes; never forwarded. */
 export const SERVICE_KEY_HEADER = "x-amika-hostd-key";
@@ -78,27 +70,6 @@ export function bearerToken(header: string | string[] | null | undefined) {
   if (typeof header !== "string") return "";
   const match = /^Bearer\s+(\S+)\s*$/i.exec(header.trim());
   return match ? match[1] : "";
-}
-
-/**
- * Why a service-link request is refused, or null to let it through: 401
- * unless the link's token is a signature over its machine and service that
- * has not expired, 400 when the host key is sent as the `Authorization` the
- * guest would receive. The host key header is not needed, nor checked.
- */
-export async function authorizeServiceLinkRequest(
-  secretKey: string,
-  link: ServiceLinkRoute,
-  headers: { authorization?: string | string[] | null },
-  nowS = Math.floor(Date.now() / 1000),
-): Promise<400 | 401 | null> {
-  const problem = await verifyServiceLink(
-    secretKey,
-    { rig: link.machine, service: link.service, token: link.token },
-    nowS,
-  );
-  if (problem) return 401;
-  return authorizeServiceRequest(secretKey, headers, { requireKey: false });
 }
 
 /**

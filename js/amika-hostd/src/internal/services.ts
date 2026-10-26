@@ -5,15 +5,14 @@
  * A machine created with `services` gets each guest port published on a host
  * loopback port (by the `smolvm-sdk` provider), and hostd records which name
  * maps to which port (`./service-registry.ts`). A service route,
- * `/v0beta1/rigs/<machine>/services/<name>/<path>`, a signed link to one, or
- * a page the link opened forwards HTTP requests and WebSocket upgrades
+ * `/v0beta1/rigs/<machine>/services/<name>/<path>`, a preview of one, or a
+ * page the preview opened forwards HTTP requests and WebSocket upgrades
  * there, with `<path>` as the guest path.
  *
  * Who may reach which service is the gateway's to decide
- * (`@amika/service-auth/gateway`): the host's secret key, a service token, a
- * signed link or its cookie, or a browser session on a preview. This module
- * only carries out its decisions,
- * and never forwards a credential of the gateway's to a guest.
+ * (`@amika/service-auth/gateway`): the host's secret key, a service token,
+ * or a browser session on a preview. This module only carries out its
+ * decisions, and never forwards a credential of the gateway's to a guest.
  */
 import type { IncomingMessage } from "node:http";
 import { connect, type Socket } from "node:net";

@@ -9,6 +9,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { signSession } from "@amika/service-auth/credentials";
 import { createApp } from "../../../../amika-hostd/src/app";
 // The real store and capture, so this contract test covers hostd's snapshot
 // behaviour rather than a stand-in for it.
@@ -697,12 +698,19 @@ describe("amika-hostd services", () => {
       secretKey: SECRET,
       apiUrl: "https://preview.example",
     };
+    const AMIKA = "https://app.amika.test";
+    /** A browser holding a session for the preview host, as after login. */
+    const loggedIn = async () => ({
+      Cookie: `__Host-amika-session=${await signSession(SECRET, {
+        origin: PREVIEW_HOST.apiUrl,
+        user: "user_1",
+      })}`,
+      "Sec-Fetch-Mode": "navigate",
+      "Sec-Fetch-Site": "none",
+    });
 
-    it("hands a host that logs browsers in a preview with no credential", async () => {
-      const { provider } = harness({
-        config: PREVIEW_HOST,
-        amikaUrl: "https://app.amika.test",
-      });
+    it("hands every service but amikad a preview with no credential", async () => {
+      const { provider } = harness({ config: PREVIEW_HOST, amikaUrl: AMIKA });
       await provider.sandboxes.create(ctx, {
         ...INPUT,
         services: [WEB, AMIKAD],
@@ -717,107 +725,63 @@ describe("amika-hostd services", () => {
       expect(services[1].url).toBe(
         "https://preview.example/v0beta1/rigs/demo/services/amikad/",
       );
-    });
-
-    it("keeps signed links on a host whose hostd serves no previews", async () => {
-      const { provider } = harness({ config: PREVIEW_HOST });
-      await provider.sandboxes.create(ctx, { ...INPUT, services: [WEB] });
-      const { services } = await provider.sandboxes
-        .get("demo")
-        .services!.refreshAll([WEB]);
-      expect(services[0].url).toMatch(
-        /^https:\/\/preview\.example\/v0beta1\/rigs\/demo\/service-links\/web\/\d+\./,
-      );
-    });
-
-    it("keeps signed links on a host that cannot hold browser cookies", async () => {
-      // A loopback URL, even with a hostd that serves previews.
-      const { provider } = harness({ amikaUrl: "https://app.amika.test" });
-      await provider.sandboxes.create(ctx, { ...INPUT, services: [WEB] });
-      const { services } = await provider.sandboxes
-        .get("demo")
-        .services!.refreshAll([WEB]);
-      expect(services[0].url).toContain("/service-links/web/");
-    });
-  });
-
-  describe("signed service links", () => {
-    afterEach(() => {
-      vi.useRealTimers();
-    });
-
-    it("hands every other service a link hostd opens with no key", async () => {
-      vi.useFakeTimers({ toFake: ["Date"] });
-      vi.setSystemTime(new Date("2026-10-08T00:00:00Z"));
-      const { app, provider, guest, machines } = harness();
-      await provider.sandboxes.create(ctx, {
-        ...INPUT,
-        services: [WEB, AMIKAD],
-      });
-      const { services: refreshed } = await provider.sandboxes
-        .get("demo")
-        .services!.refreshAll([WEB, AMIKAD]);
-      const url = new URL(refreshed[0].url);
-      // A day: a link served at the end of the control plane's twelve-hour
-      // TTL still has twelve hours left.
-      const expiry = Date.parse("2026-10-09T00:00:00Z") / 1000;
-      expect(url.href).toMatch(
-        new RegExp(
-          `^http://127\\.0\\.0\\.1:3020/v0beta1/rigs/demo/service-links/web/${expiry}\\.[A-Za-z0-9_-]{43}/$`,
-        ),
-      );
       expect(provider.signedUrlTtlSeconds).toBe(12 * 3600);
+    });
 
-      const response = await app.request(`${url.pathname}assets/app.js?v=1`);
+    it("serves a preview to a browser that logged in, and only to one", async () => {
+      const { app, provider, guest, machines } = harness({
+        config: PREVIEW_HOST,
+        amikaUrl: AMIKA,
+      });
+      await provider.sandboxes.create(ctx, { ...INPUT, services: [WEB] });
+      const { services } = await provider.sandboxes
+        .get("demo")
+        .services!.refreshAll([WEB]);
+      const url = `${services[0].url}assets/app.js?v=1`;
+
+      const response = await app.request(url, { headers: await loggedIn() });
       expect(response.status).toBe(200);
       expect(guest.mock.calls.map(([target]) => target)).toEqual([
         `http://127.0.0.1:${published(machines.get("demo"), 3000)}/assets/app.js?v=1`,
       ]);
 
-      vi.setSystemTime((expiry - 1) * 1000);
-      expect((await app.request(url.pathname)).status).toBe(200);
-      vi.setSystemTime(expiry * 1000);
-      expect((await app.request(url.pathname)).status).toBe(401);
+      // Without a session, a page load is sent to log in through Amika.
+      const anonymous = await app.request(url, {
+        headers: { "Sec-Fetch-Mode": "navigate", "Sec-Fetch-Site": "none" },
+      });
+      expect(anonymous.status).toBe(302);
+      expect(anonymous.headers.get("location")).toMatch(/^\/__amika\/login\?/);
+      expect(guest).toHaveBeenCalledTimes(1);
     });
 
-    it("refuses a link once the host's secret key changes", async () => {
-      const { app, provider, smolvm } = harness();
-      await provider.sandboxes.create(ctx, { ...INPUT, services: [WEB] });
-      const { services: refreshed } = await provider.sandboxes
-        .get("demo")
-        .services!.refreshAll([WEB]);
-      const path = new URL(refreshed[0].url).pathname;
-      expect((await app.request(path)).status).toBe(200);
-      // The same machine and routes behind a host whose key was regenerated.
-      // A fixed registry, through createApp's own injection point.
-      const registry = {
-        port: (machine: string, service: string) =>
-          machine === "demo" && service === "web" ? 3000 : undefined,
-        set: () => {},
-        remove: () => {},
-      };
-      const rotated = createApp(
-        { secretKey: `${SECRET}-regenerated` },
-        providerRuntime({ apiUrl: SMOL_API_URL, fetch: smolvm }),
-        { registry, fetch: async () => Response.json({ ok: true }) },
-      );
-      expect((await rotated.request(path)).status).toBe(401);
-    });
-
-    it("signs amikad on another port like any other service", async () => {
-      const { app, provider, guest, machines } = harness();
+    it("hands amikad on another port a preview like any other service", async () => {
+      const { provider } = harness();
       const other = { ...AMIKAD, containerPort: 2222, hostPort: 2222 };
       await provider.sandboxes.create(ctx, { ...INPUT, services: [other] });
-      const { services: refreshed } = await provider.sandboxes
+      const { services } = await provider.sandboxes
         .get("demo")
         .services!.refreshAll([other]);
-      const url = new URL(refreshed[0].url);
-      expect(url.pathname).toContain(
-        "/v0beta1/rigs/demo/service-links/amikad/",
+      expect(services[0].url).toBe(
+        "http://127.0.0.1:3020/v0beta1/rigs/demo/previews/amikad/",
       );
-      expect((await app.request(url.pathname)).status).toBe(200);
-      expect(guest.mock.calls[0][0]).toBe(
-        `http://127.0.0.1:${published(machines.get("demo"), 2222)}/`,
+    });
+
+    it("tells a browser on a host that cannot log it in to upgrade", async () => {
+      // A loopback URL, where no browser cookie can be set.
+      const { app, provider } = harness({ amikaUrl: AMIKA });
+      await provider.sandboxes.create(ctx, { ...INPUT, services: [WEB] });
+      const { services } = await provider.sandboxes
+        .get("demo")
+        .services!.refreshAll([WEB]);
+      expect(services[0].url).toBe(
+        "http://127.0.0.1:3020/v0beta1/rigs/demo/previews/web/",
+      );
+      const login = await app.request(
+        new URL("/__amika/login?return=/", services[0].url),
+      );
+      expect(login.status).toBe(400);
+      expect(((await login.json()) as { error: string }).error).toContain(
+        "upgrade amika-hostd",
       );
     });
   });
@@ -829,11 +793,13 @@ describe("amika-hostd services", () => {
     const { services: refreshed } = await provider.sandboxes
       .get("demo")
       .services!.refreshAll([agent]);
-    const url = new URL(refreshed[0].url);
-    expect(url.pathname).toMatch(
-      /^\/v0beta1\/rigs\/demo\/service-links\/Coding%20Agent\/[^/]+\/$/,
+    expect(new URL(refreshed[0].url).pathname).toBe(
+      "/v0beta1/rigs/demo/previews/Coding%20Agent/",
     );
-    const response = await app.request(url.pathname);
+    const response = await app.request(
+      "/v0beta1/rigs/demo/services/Coding%20Agent/",
+      { headers: { [HOSTD_SERVICE_KEY_HEADER]: SECRET } },
+    );
     expect(response.status).toBe(200);
     expect(guest.mock.calls[0][0]).toBe(
       `http://127.0.0.1:${published(machines.get("demo"), 3000)}/`,
@@ -861,8 +827,8 @@ describe("amika-hostd services", () => {
     const services = provider.sandboxes.get("demo").services!;
     const site = { ...WEB, name: "site" };
     const { services: renamed } = await services.load([site, AMIKAD]).refresh();
-    expect(renamed[0].url).toContain(
-      "http://127.0.0.1:3020/v0beta1/rigs/demo/service-links/site/",
+    expect(renamed[0].url).toBe(
+      "http://127.0.0.1:3020/v0beta1/rigs/demo/previews/site/",
     );
     const route = (name: string) =>
       app.request(`/v0beta1/rigs/demo/services/${name}/`, { headers: key });
@@ -915,8 +881,8 @@ describe("amika-hostd services", () => {
     const { services: refreshed } = await services
       .load([WEB, AMIKAD])
       .refresh();
-    expect(refreshed[0].url).toContain(
-      "http://127.0.0.1:3020/v0beta1/rigs/demo/service-links/web/",
+    expect(refreshed[0].url).toBe(
+      "http://127.0.0.1:3020/v0beta1/rigs/demo/previews/web/",
     );
     expect(refreshed[1].url).toBe(
       "http://127.0.0.1:3020/v0beta1/rigs/demo/services/amikad/",

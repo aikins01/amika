@@ -10,13 +10,12 @@
  *   `X-Amika-Hostd-Key`, or a service token in `X-Amika-Authorization`
  *   (`./keys.ts`). On an upgrade only, amikad's SSH WebSocket may come with
  *   neither: `keyless`, which the server must still pin to amikad's port.
- * - `/v0beta1/rigs/<rig>/service-links/<name>/<token>/...`, a signed link.
- * - Any path outside the server's own (`isOwnPath`) with the link cookie a
- *   link set (`./link-cookie.ts`): a page's root-relative URLs.
- * - With `amikaUrl`, `/v0beta1/rigs/<rig>/previews/<name>/...` and the
- *   preview cookie, for a browser holding a session it logged in for
- *   through Amika (`./browser-login.ts`). The login itself runs on two
- *   endpoints the server mounts: `startLogin` and `finishLogin`.
+ * - With `amikaUrl`, `/v0beta1/rigs/<rig>/previews/<name>/...`, and any
+ *   path outside the server's own (`isOwnPath`) with the preview cookie a
+ *   preview set (a page's root-relative URLs), for a browser holding a
+ *   session it logged in for through Amika (`./browser-login.ts`). The
+ *   login itself runs on two endpoints the server mounts: `startLogin` and
+ *   `finishLogin`.
  * - A request the server names (`GatewayRequest.named`): one that reached
  *   a service at its own hostname, `<service>--<rig>.r.<org>.o.<zone>`.
  *   Every path on that origin is the service's, but for the two login
@@ -29,25 +28,20 @@
  * Every credential is the gateway's: the server forwards none of them
  * (`isCredentialHeader`, `guestCookies`), it drops a guest's `Set-Cookie`
  * for any of the gateway's cookies (`finish`, `finishUpgrade`), and
- * responses on a link or a preview are hardened (`harden`).
+ * responses on a preview are hardened (`harden`).
  */
 import {
   SERVICE_KEY_HEADER,
   SERVICE_TOKEN_HEADER_NAME,
-  authorizeServiceLinkRequest,
   authorizeServiceRequest,
   authorizeServiceRouteRequest,
 } from "./keys";
 import {
-  PREVIEW_COOKIE,
   carriesGatewayCookie,
-  expiredCookie,
-  linkCookie,
-  linkFromCookie,
   setsGatewayCookie,
   withoutGatewayCookies,
-} from "./link-cookie";
-import { hardenServiceLinkResponse, tokenHint } from "./responses";
+} from "./cookies";
+import { tokenHint } from "./responses";
 import {
   CALLBACK_PATH,
   LOGIN_PATH,
@@ -67,7 +61,6 @@ import {
   AMIKAD_SERVICE,
   isAmikadSshUpgrade,
   isNamedAmikadSshUpgrade,
-  parseServiceLinkPath,
   parseServicePath,
   type GatewayRequest,
   type ServiceRoute,
@@ -77,8 +70,8 @@ export interface GatewayOptions {
   /** The host's secret key, from which every credential is derived. */
   secretKey: string;
   /**
-   * The server's own paths, which the link cookie never claims: its API,
-   * every service and link route, its health check.
+   * The server's own paths, which the preview cookie never claims: its API,
+   * every service and preview route, its health check.
    */
   isOwnPath: (pathname: string) => boolean;
   /**
@@ -89,11 +82,10 @@ export interface GatewayOptions {
 }
 
 /**
- * Where a request came in: a keyed or token service route, a link (its
- * path, or the cookie it set), or a preview (its path, or its cookie). A
- * link's and a preview's responses are hardened, each its own way.
+ * Where a request came in: a keyed or token service route, or a preview (its
+ * path, or its cookie). A preview's responses are hardened.
  */
-export type GatewaySurface = "service" | "link" | "preview";
+export type GatewaySurface = "service" | "preview";
 
 /** Forward the request to `route`'s service. */
 export interface ForwardDecision {
@@ -105,10 +97,7 @@ export interface ForwardDecision {
    * forward it only to amikad on the port Amika registers it at.
    */
   keyless: boolean;
-  /**
-   * To add to the response: a link or preview opened in a browser sets its
-   * cookie and ends the other's.
-   */
+  /** To add to the response: a preview opened in a browser sets its cookie. */
   setCookies: string[];
 }
 
@@ -143,19 +132,13 @@ export function createGateway({
 }: GatewayOptions) {
   const previews = amikaUrl !== undefined;
   const loginStates = usedLoginStates();
-  const cookieClaim = ({ url, headers }: GatewayRequest) =>
-    isOwnPath(url.pathname)
-      ? null
-      : linkFromCookie(headers.get("cookie"), headers.get("sec-fetch-site"));
   /** A preview's path, or a root-relative URL its cookie routes. */
   const previewClaim = (request: GatewayRequest) => {
     if (!previews) return null;
     const { url, headers } = request;
     const route = parsePreviewPath(url.pathname);
     if (route) return { route, cookie: false };
-    // A link cookie wins. Opening a link or a preview ends the other's
-    // cookie, so a browser holding both is one where that failed.
-    if (isOwnPath(url.pathname) || cookieClaim(request)) return null;
+    if (isOwnPath(url.pathname)) return null;
     const preview = previewFromCookie(
       headers.get("cookie"),
       headers.get("sec-fetch-site"),
@@ -175,8 +158,6 @@ export function createGateway({
       return Boolean(
         request.named ||
         parseServicePath(pathname) ||
-        parseServiceLinkPath(pathname) ||
-        cookieClaim(request) ||
         (previews && isLoginEndpoint(pathname)) ||
         previewClaim(request),
       );
@@ -207,28 +188,11 @@ export function createGateway({
         return authorizeNamed(request, request.named, upgrade);
       }
 
-      // A root-relative URL a page opened through a link asks for.
-      const claim = cookieClaim(request);
-      if (claim) {
-        // A worker script served from the root would claim every link on
-        // the host, not just this one's (`hardenServiceLinkResponse`).
-        if (!upgrade && headers.get("service-worker") === "script") {
-          return { kind: "refuse", surface: "link", status: 404 };
-        }
-        const link = { ...claim, path: url.pathname };
-        const refusal = await authorizeServiceLinkRequest(
-          secretKey,
-          link,
-          credentials,
-        );
-        if (refusal)
-          return { kind: "refuse", surface: "link", status: refusal };
-        return forward("link", link, { setCookies: [] });
-      }
-
       const preview = previewClaim(request);
       if (preview) {
         const { route } = preview;
+        // A worker script served from the root would claim every preview
+        // on the host, not just this one's.
         if (
           preview.cookie &&
           !upgrade &&
@@ -263,26 +227,6 @@ export function createGateway({
         // and a page load the cookie routes renews that cookie.
         return forward("preview", route, {
           setCookies: upgrade ? [] : previewCookies(request, route),
-        });
-      }
-
-      const link = parseServiceLinkPath(url.pathname);
-      if (link) {
-        const refusal = await authorizeServiceLinkRequest(
-          secretKey,
-          link,
-          credentials,
-        );
-        if (refusal)
-          return { kind: "refuse", surface: "link", status: refusal };
-        // Opening a link hands its root-relative URLs to this service.
-        const cookie = upgrade ? null : linkCookie(request, link);
-        return forward("link", link, {
-          setCookies: !cookie
-            ? []
-            : previews
-              ? [cookie, expiredCookie(PREVIEW_COOKIE)]
-              : [cookie],
         });
       }
 
@@ -519,16 +463,14 @@ export function createGateway({
   }
 
   /**
-   * `response` as its surface's must be: a link's and a preview's hardened,
-   * as is every answer there, the server's own `404`s and `502`s included.
+   * `response` as its surface's must be: a preview's hardened, as is every
+   * answer there, the server's own `404`s and `502`s included.
    */
   function harden(
     decision: ForwardDecision | RefuseDecision,
     response: Response,
   ): Response {
     switch (decision.surface) {
-      case "link":
-        return hardenServiceLinkResponse(response);
       case "preview":
         return hardenPreviewResponse(response);
       case "service":

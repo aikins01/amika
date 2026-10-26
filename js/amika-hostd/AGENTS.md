@@ -92,24 +92,22 @@ Each of these is stated in full, with its reason, in the doc it links to.
 
 **Credentials reaching hostd**
 
-- **The host key never reaches a browser.** A browser uses a signed service
-  link instead, minted on the control plane and verified locally, both with
-  `@amika/service-auth/credentials`: an HMAC-SHA256 over the machine, service
-  and expiry under a key derived from the secret key. Service tokens, the
-  browser-login pass and the session sign under other derived keys, so no
-  credential works as another. See [Service routes](docs/service-routes.md).
-- **A link's path is its credential**, and no single link can be revoked, so
-  `hardenServiceLinkResponse` wraps every response on a link route, hostd's
-  own `401`, `404` and `308` included, and sets its headers rather than
-  defaulting them.
+- **The host key never reaches a browser.** A browser opens a preview, whose
+  URL carries no credential, with a session it logged in for through Amika;
+  scripts send a service token. Each is signed on the control plane and
+  verified locally, both with `@amika/service-auth/credentials`, under its
+  own key derived from the secret key, so no credential works as another.
+  Signed service links are retired: hostd serves no `service-links` route.
+  See [Service routes](docs/service-routes.md).
 - **hostd never forwards a credential it checks.** The key, the service-token
   header and hostd's own cookies are stripped before forwarding, for HTTP and
   WebSocket upgrades alike, and a guest's `Set-Cookie` under `__Host-amika-`
   is dropped.
 - **Each credential opens only its own routes.** hostd's own paths never
-  accept the link cookie, so the machine API, keyed service routes and
-  `/health` still need the key; no link cookie or service token is set for or
-  accepted for `amikad`; a browser session opens previews and nothing else.
+  accept the preview cookie, so the machine API, keyed service routes and
+  `/health` still need the key; no preview cookie or service token is set
+  for or accepted for `amikad`; a browser session opens previews and nothing
+  else.
   hostd sets no cookie on a loopback address or an explicit port.
 
 **Secrets on the host**
@@ -186,8 +184,8 @@ Each of these is stated in full, with its reason, in the doc it links to.
   changing a route, a `/health` feature, or how a request is authenticated
   (`src/app.ts`, `auth.ts`).
 - [docs/service-routes.md](docs/service-routes.md) — read when changing
-  service routing, signed links, service tokens, the link cookie, previews or
-  browser login (`src/app.ts`, `services.ts`, `service-registry.ts`,
+  service routing, service tokens, previews, the preview cookie or browser
+  login (`src/app.ts`, `services.ts`, `service-registry.ts`,
   `@amika/service-auth`).
 - [docs/snapshots.md](docs/snapshots.md) — read when changing snapshot capture
   or storage (`snapshots.ts`, `snapshot-store.ts`) or how a create resolves

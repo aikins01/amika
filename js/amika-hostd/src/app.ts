@@ -21,7 +21,6 @@ import {
 import {
   fromRequest,
   hardenPreviewResponse,
-  hardenServiceLinkResponse,
   type Gateway,
 } from "@amika/service-auth/gateway";
 import {
@@ -52,8 +51,9 @@ export interface AppConfig {
   /**
    * Every request must present this: as a bearer token, or in
    * `X-Amika-Hostd-Key` on `/v0beta1/rigs/.../services/...` routes, whose
-   * `Authorization` belongs to the guest. `/v0beta1/rigs/.../service-links/...`
-   * routes present a link signed with a key derived from it instead.
+   * `Authorization` belongs to the guest. A service token or a browser
+   * session signed with a key derived from it may stand in on service and
+   * preview routes.
    */
   secretKey: string;
   /** Preset image names mapped to the OCI references machines boot. */
@@ -199,7 +199,7 @@ export function createApp(
   });
   // Authenticate before reading any body, so unauthenticated callers cannot
   // make the daemon buffer up to the body limit.
-  // Service routes, service-link routes and a guest path the link cookie
+  // Service routes, preview routes and a guest path the preview cookie
   // claims are the gateway's: it checks each before the body is touched
   // (`@amika/service-auth/gateway`). Everything else needs the secret key.
   const gateway = hostdGateway(secretKey, amikaUrl);
@@ -251,22 +251,6 @@ export function createApp(
   app.all(`${RIGS_ROUTE}/:name/services/:service`, (c) =>
     proxyService(c.req.raw, gateway, runtime, registry, fetcher),
   );
-  // A link missing its trailing slash would resolve the service's relative
-  // URLs one segment up, dropping the token, so it is sent to the full link.
-  // The redirect grants nothing: the full link is verified as usual. It is
-  // registered first because Hono's `/*` also matches the bare path.
-  app.all(`${RIGS_ROUTE}/:name/service-links/:service/:token`, (c) => {
-    const url = new URL(c.req.url);
-    return hardenServiceLinkResponse(
-      new Response(null, {
-        status: 308,
-        headers: { Location: `${url.pathname}/${url.search}` },
-      }),
-    );
-  });
-  app.all(`${RIGS_ROUTE}/:name/service-links/:service/:token/*`, (c) =>
-    proxyService(c.req.raw, gateway, runtime, registry, fetcher),
-  );
   // Snapshots, only at the versioned path: a control plane old enough to
   // call the legacy machine API knows nothing about them.
   if (snapshots) snapshotRoutes(snapshots);
@@ -275,8 +259,10 @@ export function createApp(
     app.post(CALLBACK_PATH, bodyLimit({ maxSize: 16 * 1024 }), (c) =>
       gateway.finishLogin(c.req.raw),
     );
-    // As for a link: a preview missing its trailing slash would resolve the
-    // service's relative URLs one segment up.
+    // A preview missing its trailing slash would resolve the service's
+    // relative URLs one segment up, so it is sent to the full preview. The
+    // redirect grants nothing. It is registered first because Hono's `/*`
+    // also matches the bare path.
     app.all(`${RIGS_ROUTE}/:name/previews/:service`, (c) => {
       const url = new URL(c.req.url);
       return hardenPreviewResponse(
@@ -296,7 +282,7 @@ export function createApp(
     machineRoutes(machines);
   }
   // Last, so it only sees what no route above claims: a root-relative URL a
-  // page opened through a link asks for, sent to the service the link
+  // page opened through a preview asks for, sent to the service the preview
   // cookie names, which the gateway decides.
   app.all("*", async (c) =>
     gateway.claims(fromRequest(c.req.raw))
@@ -545,7 +531,7 @@ function incomingOf(env: unknown): IncomingMessage | undefined {
 /**
  * Forward a request the gateway claims to the service it names, as the
  * gateway decides: refused, or forwarded without the gateway's credentials,
- * with its answer finished by the gateway (a link's cookie and hardening).
+ * with its answer finished by the gateway (a preview's cookie and hardening).
  */
 async function proxyService(
   request: Request,

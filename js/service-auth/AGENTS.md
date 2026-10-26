@@ -4,10 +4,10 @@ Who may reach a rig's service, and the credentials that say so. Kept apart
 from amika-hostd so the auth proxy can become its own package, or a service
 in front of hosts, without untangling it from the daemon.
 
-| Entry point                       | What it holds                                                                                               |
-| --------------------------------- | ----------------------------------------------------------------------------------------------------------- |
-| `@amika/service-auth/credentials` | Signing and verifying service links, service tokens, browser login passes and sessions (`src/credentials/`) |
-| `@amika/service-auth/gateway`     | Deciding each request: forward, refuse, or not ours (`src/gateway/`)                                        |
+| Entry point                       | What it holds                                                                                |
+| --------------------------------- | -------------------------------------------------------------------------------------------- |
+| `@amika/service-auth/credentials` | Signing and verifying service tokens, browser login passes and sessions (`src/credentials/`) |
+| `@amika/service-auth/gateway`     | Deciding each request: forward, refuse, or not ours (`src/gateway/`)                         |
 
 The control plane (amika-mono, through `@amika/sandbox`) signs credentials;
 a gateway verifies them with the same host secret key, so neither calls the
@@ -19,8 +19,8 @@ other.
 `authorize(request)` answers one of:
 
 - `forward`: the rig, service and guest path to send the request to, the
-  cookies to set on the answer, the surface it came in on (a link's or a
-  preview's answers `finish` / `harden` lock down), and whether it is
+  cookies to set on the answer, the surface it came in on (a preview's
+  answers `finish` / `harden` lock down), and whether it is
   amikad's keyless SSH upgrade (which the server must pin to amikad's port).
 - `refuse`: the status, and for a `401` a hint; `refusal` renders it. A
   `403` is a preview request that is neither the origin's own nor a page

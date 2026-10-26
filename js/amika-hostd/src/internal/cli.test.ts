@@ -570,21 +570,24 @@ describe("completing registration", () => {
 
   it.each([
     ["https://abc.ngrok.app/", undefined],
-    ["http://localhost:4000", "no preview cookie on a loopback address"],
-    ["https://127.0.0.1:4000", "no preview cookie on a loopback address"],
+    ["http://localhost:4000", "no browser login cookie on a loopback address"],
+    ["https://127.0.0.1:4000", "no browser login cookie on a loopback address"],
     [
       "https://[::ffff:127.0.0.1]:4000",
-      "no preview cookie on a loopback address",
+      "no browser login cookie on a loopback address",
     ],
     ["https://example.com/hostd/", "serves hostd under /hostd/"],
-    ["http://host.example", "drop hostd's preview cookie over plain http"],
-    ["https://preview.example:8443", "no preview cookie on an explicit port"],
+    ["http://host.example", "drop hostd's login cookie over plain http"],
+    [
+      "https://preview.example:8443",
+      "no browser login cookie on an explicit port",
+    ],
   ])(
-    "register-url %s warns only when previews cannot route root paths",
+    "register-url %s warns only when browsers cannot open previews",
     async (url, warning) => {
       const { deps, err } = unregistered();
       expect(await runCli(["register-url", url], deps)).toBe(0);
-      // The URL is kept either way: links themselves still work.
+      // The URL is kept either way: service tokens still work.
       expect(deps.setHostUrl).toHaveBeenCalled();
       if (warning) expect(err.join("\n")).toContain(warning);
       else expect(err).toEqual([]);

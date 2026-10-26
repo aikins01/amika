@@ -1051,27 +1051,28 @@ async function saveUrl(
 }
 
 /**
- * Why a browser cannot follow a preview's root-relative URLs (`/_next/...`,
- * `/@vite/client`) at public URL `url`, or undefined when it can. The link
- * cookie routes them (`@amika/service-auth/gateway`), which needs every root path of the
- * origin to reach hostd, and a cookie a browser keeps: it drops a `Secure`
- * one over plain http, and hostd sets none on a loopback address or an
- * explicit port, since a host's cookies are shared across its ports. Links themselves work either way, so
- * the URL is kept and the operator warned.
+ * Why a browser cannot open a preview at public URL `url`, or undefined when
+ * it can. A preview needs a browser login, whose cookies a browser keeps only
+ * at the root of an https origin of hostd's own: it drops a `Secure` one over
+ * plain http, and hostd sets none on a loopback address or an explicit port,
+ * since a host's cookies are shared across its ports. The preview cookie also
+ * routes a page's root-relative URLs (`/_next/...`, `/@vite/client`), which
+ * needs every root path of the origin to reach hostd. Scripts still reach
+ * services with a service token, so the URL is kept and the operator warned.
  */
 function previewRoutingProblem(url: string): string | undefined {
   const { protocol, hostname, port, pathname } = new URL(url);
   if (pathname !== "/") {
-    return `${url} serves hostd under ${pathname}, so a preview's root-relative URLs (\`/_next/...\`, \`/@vite/client\`) miss it and fail; give hostd the root of its own origin for previews of dev servers.`;
+    return `${url} serves hostd under ${pathname}, so browsers cannot open this host's previews; give hostd the root of its own https origin, as ngrok and cloudflared give.`;
   }
   if (isLoopbackHost(hostname)) {
-    return `hostd sets no preview cookie on a loopback address, which every local server shares, so a preview's root-relative URLs (\`/_next/...\`, \`/@vite/client\`) fail; use an https URL, as ngrok and cloudflared give.`;
+    return `hostd sets no browser login cookie on a loopback address, which every local server shares, so browsers cannot open this host's previews; use an https URL, as ngrok and cloudflared give.`;
   }
   if (port !== "") {
-    return `hostd sets no preview cookie on an explicit port (${port}), since a browser shares a host's cookies across its ports, so a preview's root-relative URLs (\`/_next/...\`, \`/@vite/client\`) fail; give hostd a hostname of its own on the default https port, as ngrok and cloudflared give.`;
+    return `hostd sets no browser login cookie on an explicit port (${port}), since a browser shares a host's cookies across its ports, so browsers cannot open this host's previews; give hostd a hostname of its own on the default https port, as ngrok and cloudflared give.`;
   }
   if (protocol === "http:") {
-    return `browsers drop hostd's preview cookie over plain http, so a preview's root-relative URLs (\`/_next/...\`, \`/@vite/client\`) fail; use an https URL, as ngrok and cloudflared give.`;
+    return `browsers drop hostd's login cookie over plain http, so they cannot open this host's previews; use an https URL, as ngrok and cloudflared give.`;
   }
   return undefined;
 }
