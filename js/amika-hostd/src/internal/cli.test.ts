@@ -92,7 +92,12 @@ function memorySecrets() {
   return { credentials, keychainSecret, attachmentCredential, openSecrets };
 }
 
+/**
+ * A host listening on a port, which most of these tests exercise, unless
+ * `env` sets AMIKA_HOSTD_TRANSPORT. The default itself is `config.test`'s.
+ */
 function harness(env: NodeJS.ProcessEnv = ENV) {
+  env = { AMIKA_HOSTD_TRANSPORT: "listen", ...env };
   const out: string[] = [];
   const err: string[] = [];
   const server: RunningServer = { port: 3020, close: vi.fn(async () => {}) };
@@ -326,11 +331,7 @@ describe("runCli", () => {
     // bound port on a host Amika reaches by tunnel is a second address
     // nobody routes to, and on a machine behind a home router it is the
     // one an operator would try first.
-    const { deps, out } = harness();
-    deps.loadConfigFile.mockReturnValue({
-      path: "/etc/amika-hostd/config.toml",
-      contents: 'transport = "tunnel"',
-    } as never);
+    const { deps, out } = harness({ ...ENV, AMIKA_HOSTD_TRANSPORT: "tunnel" });
 
     await runCli(["serve"], deps);
 
@@ -344,11 +345,7 @@ describe("runCli", () => {
     // `up` waits on this. A port here would be a lie -- there is none --
     // and the connection id is what lets an operator match this daemon
     // against the gateway's logs.
-    const { deps } = harness();
-    deps.loadConfigFile.mockReturnValue({
-      path: "/etc/amika-hostd/config.toml",
-      contents: 'transport = "tunnel"',
-    } as never);
+    const { deps } = harness({ ...ENV, AMIKA_HOSTD_TRANSPORT: "tunnel" });
 
     await runCli(["serve"], deps);
 
@@ -827,7 +824,7 @@ describe("enrolling a tunnel host", () => {
 
   /** A host configured for tunnel mode at `/etc/amika-hostd`. */
   function tunnelHost() {
-    const h = harness();
+    const h = harness({ ...ENV, AMIKA_HOSTD_TRANSPORT: "tunnel" });
     h.deps.loadConfigFile.mockReturnValue({
       path: "/etc/amika-hostd/config.toml",
       contents: 'transport = "tunnel"',
@@ -979,11 +976,7 @@ describe("enrolling a tunnel host", () => {
 describe("a tunnel daemon", () => {
   /** A harness whose config chooses the tunnel. */
   function tunnelled() {
-    const h = harness();
-    h.deps.loadConfigFile.mockReturnValue({
-      path: "/etc/amika-hostd/config.toml",
-      contents: 'transport = "tunnel"',
-    } as never);
+    const h = harness({ ...ENV, AMIKA_HOSTD_TRANSPORT: "tunnel" });
     return h;
   }
 

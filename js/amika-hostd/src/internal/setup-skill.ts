@@ -78,10 +78,11 @@ Then fill \`<dir>/api-key\` one of two ways:
 - **With the \`amika\` CLI**, if it is installed and \`amika auth status\`
   reports it authenticated. It writes the key to the file with mode 0600:
 
-      amika auth api-key create --name <name>-hostd --out <dir>/api-key
+      amika auth api-key create --name <name>-hostd --scope user --out <dir>/api-key
 
-  Keep the default organization scope: a host belongs to the organization,
-  so its key should keep working when the person who set it up leaves.
+  Use user scope, not the CLI's default organization scope: a host Amika
+  reaches through its gateway (the default) enrols with the key, and Amika
+  enrols a host only for a person.
 - **By hand** otherwise. Create the file empty
   (\`install -m 600 /dev/null <dir>/api-key\`), then ask the operator to
   create an API key in the Amika web app, at \`/settings/api-keys\` on the
@@ -126,20 +127,23 @@ by running \`amika-hostd setup\` in a terminal and choosing to regenerate it.
     amika-hostd up
 
 Without a terminal \`up\` asks nothing. It registers the host with Amika,
-starts the daemon and smolvm in the background, and reports the port it
-listens on. By this host's config the daemon is at ${localUrl}; if \`up\`
-reports another port (a \`--port\` flag, or \`AMIKA_HOSTD_PORT\`), use that
-instead below. If it fails with "Missing required configuration", step 2 is
-not done; the message names what is missing.
+starts the daemon and smolvm in the background, and by default connects out
+to Amika's gateway, binding no port. A host whose config sets
+\`transport = "listen"\` binds one instead, and \`up\` reports it: by this
+host's config the daemon is at ${localUrl}; if \`up\` reports another port (a
+\`--port\` flag, or \`AMIKA_HOSTD_PORT\`), use that instead below. If it fails
+with "Missing required configuration", step 2 is not done; the message names
+what is missing.
 
 ## 4. Make the host reachable
 
-If \`up\` said Amika assigns this host's address, there is nothing to do here:
+If \`up\` said Amika assigns this host's address, as it does by default,
+there is nothing to do here:
 Amika reaches such a host over its own gateway, there is no URL to give it,
 and \`register-url\` on one is refused. Whether Amika can reach it yet is
 Amika's to report, not this daemon's. Skip to step 5.
 
-Otherwise Amika reaches the host over the internet. If \`up\` printed "To
+Otherwise the host is a listener, which Amika reaches over the internet. If \`up\` printed "To
 complete registration", expose the daemon's local address with an HTTPS
 tunnel the operator approves, such as \`ngrok http ${localUrl}\` or
 \`cloudflared tunnel --url ${localUrl}\`, then give Amika the tunnel's

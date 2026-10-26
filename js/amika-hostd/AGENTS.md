@@ -27,8 +27,10 @@ export AMIKA_HOSTD_SECRET_KEY=$(openssl rand -hex 32)
 pnpm --filter @amika/hostd dev
 ```
 
-The server defaults to `127.0.0.1:3020` and refuses to start without a secret
-key. No other external services or credentials are required to serve locally.
+`dev` sets `AMIKA_HOSTD_TRANSPORT=listen`, so it binds `127.0.0.1:3020`
+instead of dialling out to Amika's gateway, which is the default transport and
+needs an enrolled host. It refuses to start without a secret key. No other
+external services or credentials are required to serve locally.
 
 ```bash
 curl -H "Authorization: Bearer $AMIKA_HOSTD_SECRET_KEY" http://127.0.0.1:3020/health

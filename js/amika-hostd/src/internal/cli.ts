@@ -85,7 +85,9 @@ Commands:
   setup               Set this host's hostname, secret key and Amika API key,
                       and write default rig sizes to the config file
   up                  Register this host with Amika, then start smolvm and the
-                      daemon in the background (running setup first if needed)
+                      daemon in the background (running setup first if needed).
+                      The daemon dials out to Amika's gateway unless the config
+                      sets transport = "listen"
   down                Stop the daemon and its smolvm, which stops every machine
   serve               Run the HTTP server in the foreground without registering
   register-url <url>  Set a listening host's internet-facing URL (e.g. an
@@ -103,8 +105,10 @@ Options:
   --skill        (setup) Print how an AI agent sets up this host
   --fg           (up) Stay in the foreground instead of backgrounding
   --smolvm       (serve) Also start smolvm, and stop it on exit, as \`up\` does
-  --port <port>  Port to listen on (AMIKA_HOSTD_PORT, TOML port; default 3020)
-  --host <host>  Address to bind (AMIKA_HOSTD_HOST, TOML host; default 127.0.0.1)
+  --port <port>  Port a listening daemon binds (AMIKA_HOSTD_PORT, TOML port;
+                 default 3020)
+  --host <host>  Address a listening daemon binds (AMIKA_HOSTD_HOST, TOML
+                 host; default 127.0.0.1)
   -h, --help     Show this help
 `;
 

@@ -25,14 +25,14 @@
 api_url = "https://app.amika.dev"
 
 # How Amika reaches this host.
-#   "listen" (the default) binds `host`:`port` below; you expose it yourself
+#   "tunnel" (the default) binds nothing and dials out to Amika's gateway,
+#     so a machine behind a home router needs no port exposed. `amika-hostd
+#     up` enrols the host; `host` and `port` have no effect.
+#   "listen" binds `host`:`port` below instead; you expose it yourself
 #     through ngrok, a port forward or cloudflared, then run
 #     `amika-hostd register-url <public-url>`.
-#   "tunnel" binds nothing and dials out to Amika's gateway instead, which is
-#     what a machine behind a home router needs. Enrol the host with
-#     `amika-hostd setup` first; `host` and `port` have no effect.
 # Environment: AMIKA_HOSTD_TRANSPORT
-# transport = "listen"
+# transport = "tunnel"
 
 # The gateway this host attaches to in tunnel mode. Normally leave this unset:
 # Amika assigns the gateway for its environment when the host is enrolled, so

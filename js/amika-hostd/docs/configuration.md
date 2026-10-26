@@ -13,6 +13,7 @@ the first source that sets it: CLI flag, then environment, then TOML file.
 | Bind host    | `--host` | `AMIKA_HOSTD_HOST`                            | `host`                         | `127.0.0.1`             |
 | Port         | `--port` | `AMIKA_HOSTD_PORT`                            | `port`                         | `3020`                  |
 | Snapshot dir |          | `AMIKA_HOSTD_SNAPSHOT_DIR`                    | `snapshot_dir`                 | in the state directory  |
+| Transport    |          | `AMIKA_HOSTD_TRANSPORT`                       | `transport`                    | `tunnel`                |
 
 Setting both names of an aliased pair to different values is an error, never a
 silent pick. A blank variable (empty, or only whitespace) sets nothing; code

@@ -7,21 +7,20 @@ that machine with the Amika control plane as a _host_, and runs each Rig on it
 as a local VM. You keep using the same `amika` CLI and web UI: a Rig created
 with `--host <hostname>` runs on your hardware instead of Amika Cloud.
 
-The VMs and their disks stay on your machine. Creating and managing a rig goes
-through Amika, which authenticates the request and forwards it to your daemon.
-Browser previews and `rig ssh` reach the daemon directly over your tunnel, on a
-credential Amika signed, so do not restrict the tunnel to Amika's own traffic.
+The VMs and their disks stay on your machine. The daemon dials out to Amika's
+gateway, so the machine needs no open port: it works behind a home router.
+Creating and managing a rig goes through Amika, which authenticates the request
+and forwards it down that connection to your daemon.
 
 ## Requirements
 
 - Linux x86_64 or arm64 with glibc 2.34+ and KVM, or macOS on Apple silicon
 - `e2fsprogs`, only if a rig size has a disk under 20 GiB: smolvm shrinks its
   template with `resize2fs`
-- A way to expose one local port to the internet over HTTPS, such as
-  [ngrok](https://ngrok.com) or
-  [Cloudflare Tunnel](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/)
-- An Amika API key, from **Settings → API keys** at
-  [app.amika.dev](https://app.amika.dev/settings/api-keys)
+- A user-scoped Amika API key, from **Settings → API keys** at
+  [app.amika.dev](https://app.amika.dev/settings/api-keys). Amika hands a
+  host the credential for its gateway only for a person, so an
+  organization-scoped key is refused.
 
 Node.js and [smolvm](https://smolmachines.com) are installed for you if the
 machine doesn't have them.
@@ -58,26 +57,14 @@ exists and `/etc/amika-hostd/config.toml` otherwise, never both.
 amika-hostd up
 ```
 
-This registers the host with Amika, starts the daemon on `127.0.0.1:3020`, and
-starts smolvm alongside it.
+This registers the host with Amika, enrols it with Amika's gateway, starts the
+daemon connected to that gateway, and starts smolvm alongside it. Amika assigns
+the host's address; there is no URL to give it.
 
-### 4. Give it a public URL
+To expose a port yourself instead, see
+[Listening on a port](#listening-on-a-port).
 
-Expose port 3020 over HTTPS, then tell Amika where to find it:
-
-```bash
-ngrok http 3020                                    # in another terminal
-amika-hostd register-url https://<your-tunnel-url> # the URL ngrok printed
-```
-
-`amika-hostd up` prompts for this URL when the host doesn't have one yet, so
-you can paste it there instead. Prefer HTTPS at the root of its own hostname on
-the default port, as a tunnel URL gives. `register-url` takes a path, an
-explicit port or plain http and warns: rigs and service tokens still work, but
-browsers cannot open the host's previews, since a browser logs in to a preview
-with a cookie that needs the host's own https origin.
-
-### 5. Create a rig on the host
+### 4. Create a rig on the host
 
 ```bash
 amika host list                                       # confirm it registered
@@ -89,7 +76,7 @@ before that finishes can time out. `up` says so, and logs the progress.
 
 In the web UI, pick **Your hosts** in the create-rig panel, then the host.
 
-### 6. Stop the host
+### 5. Stop the host
 
 ```bash
 amika-hostd down
@@ -98,9 +85,35 @@ amika-hostd down
 Stops the daemon and the VMs it is running, keeping their disks. The next `up`
 brings the daemon back, but not the rigs: start those with `amika rig start`.
 
+## Listening on a port
+
+A daemon can instead bind `127.0.0.1:3020` and let you expose it, through
+[ngrok](https://ngrok.com) or
+[Cloudflare Tunnel](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/),
+say. Set `transport = "listen"` in the config, run `amika-hostd up`, then tell
+Amika where to find it:
+
+```bash
+ngrok http 3020                                    # in another terminal
+amika-hostd register-url https://<your-tunnel-url> # the URL ngrok printed
+```
+
+`amika-hostd up` prompts for this URL when the host doesn't have one yet, so
+you can paste it there instead. Prefer HTTPS at the root of its own hostname on
+the default port, as a tunnel URL gives. `register-url` takes a path, an
+explicit port or plain http and warns: rigs and service tokens still work, but
+browsers cannot open the host's previews, since a browser logs in to a preview
+with a cookie that needs the host's own https origin. Browser previews and
+`rig ssh` reach a listening daemon directly, on a credential Amika signed, so
+do not restrict the tunnel to Amika's own traffic.
+
+A host set up before the gateway was the default, whose config has no
+`transport` line, moves to the gateway on its next `up`, which drops its
+registered URL. Add `transport = "listen"` to keep it listening.
+
 ## Configuration
 
-The config file from step 2 sets the hostname, the address to listen on, the
+The config file from step 2 sets the hostname, how Amika reaches the host, the
 rig sizes this host offers, and the preset images it boots. Every `up`
 publishes the sizes to Amika, so the file is the source of truth for them.
 Preset images stay local: this host pins the version it boots. Edit the file

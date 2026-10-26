@@ -50,7 +50,7 @@ describe("setupSkill", () => {
     // The key goes from `amika auth api-key create` into a file, from the
     // file into setup's stdin, and the file is removed.
     expect(skill).toContain(
-      "      amika auth api-key create --name <name>-hostd --out <dir>/api-key",
+      "      amika auth api-key create --name <name>-hostd --scope user --out <dir>/api-key",
     );
     expect(skill).toContain(
       "    amika-hostd setup --non-interactive --hostname <name> < <dir>/api-key",

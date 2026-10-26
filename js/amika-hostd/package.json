@@ -7,7 +7,7 @@
     "amika-hostd": "dist/bundle/amika-hostd.mjs"
   },
   "scripts": {
-    "dev": "tsx watch src/index.ts serve",
+    "dev": "AMIKA_HOSTD_TRANSPORT=listen tsx watch src/index.ts serve",
     "build": "node scripts/bundle.mjs",
     "start": "node dist/bundle/amika-hostd.mjs up --fg",
     "lint": "eslint .",
