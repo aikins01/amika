@@ -10,17 +10,23 @@ with `--host <hostname>` runs on your hardware instead of Amika Cloud.
 The VMs and their disks stay on your machine. The daemon dials out to Amika's
 gateway, so the machine needs no open port: it works behind a home router.
 Creating and managing a rig goes through Amika, which authenticates the request
-and forwards it down that connection to your daemon.
+and forwards it down that connection to your daemon. If you would rather expose
+a port yourself, through ngrok or Cloudflare Tunnel, the daemon can
+[listen on one](#listening-on-a-port) instead.
 
 ## Requirements
 
 - Linux x86_64 or arm64 with glibc 2.34+ and KVM, or macOS on Apple silicon
 - `e2fsprogs`, only if a rig size has a disk under 20 GiB: smolvm shrinks its
   template with `resize2fs`
+- Outbound HTTPS from the machine to Amika. A [listening](#listening-on-a-port)
+  host also needs a way to expose a port to the internet.
 - A user-scoped Amika API key, from **Settings → API keys** at
   [app.amika.dev](https://app.amika.dev/settings/api-keys). Amika hands a
   host the credential for its gateway only for a person, so an
-  organization-scoped key is refused.
+  organization-scoped key is refused. A [listening](#listening-on-a-port)
+  host can use either, and is better off with an organization key, which
+  outlives the person who made it.
 
 Node.js and [smolvm](https://smolmachines.com) are installed for you if the
 machine doesn't have them.
@@ -50,6 +56,11 @@ config first. Edit the file the installer printed: the daemon reads
 exists and `/etc/amika-hostd/config.toml` otherwise, never both.
 [Setup and secret storage](docs/setup-and-secrets.md) covers what setup asks,
 `setup --non-interactive` for scripts, and how each store keeps the secrets.
+
+To have an AI agent set up the host, point it at `amika-hostd setup --skill`.
+That prints step-by-step instructions it can follow without prompts, including
+whether to use the gateway or listen on a port, and how to get the API key
+without seeing it.
 
 ### 3. Start it
 
@@ -90,8 +101,9 @@ brings the daemon back, but not the rigs: start those with `amika rig start`.
 A daemon can instead bind `127.0.0.1:3020` and let you expose it, through
 [ngrok](https://ngrok.com) or
 [Cloudflare Tunnel](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/),
-say. Set `transport = "listen"` in the config, run `amika-hostd up`, then tell
-Amika where to find it:
+say. Set `transport = "listen"` in the config, above its first `[` line (or
+set `AMIKA_HOSTD_TRANSPORT=listen`, which overrides the config), run
+`amika-hostd up`, then tell Amika where to find it:
 
 ```bash
 ngrok http 3020                                    # in another terminal
